@@ -1,0 +1,8 @@
+Package: apprun
+Version: 1.0.0
+Section: misc
+Priority: optional
+Architecture: all
+Maintainer: LKS410
+Depends: python3, python3-venv
+Description: -

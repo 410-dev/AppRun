@@ -1,0 +1,8 @@
+#!/bin/bash
+
+set -e
+
+ln -s /usr/local/sbin/apprun.sh /usr/local/bin/apprun
+ln -s /usr/local/sbin/appid.sh /usr/local/bin/appid
+ln -s /usr/local/sbin/apprun-prepare.sh /usr/local/bin/apprun-prepare
+ln -s /usr/local/sbin/dictionary.py /usr/local/bin/dictionary

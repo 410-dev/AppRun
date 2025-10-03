@@ -1,0 +1,19 @@
+#!/bin/bash
+
+set -e
+
+if [ -L /usr/local/bin/apprun ]; then
+    rm /usr/local/bin/apprun
+fi
+
+if [ -L /usr/local/bin/appid ]; then
+    rm /usr/local/bin/appid
+fi
+
+if [ -L /usr/local/bin/apprun-prepare ]; then
+    rm /usr/local/bin/apprun-prepare
+fi
+
+if [ -L /usr/local/bin/dictionary ]; then
+    rm /usr/local/bin/dictionary
+fi
