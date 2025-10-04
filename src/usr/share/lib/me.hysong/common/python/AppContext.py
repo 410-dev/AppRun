@@ -16,7 +16,7 @@ class AppContext:
 
         # 현재 번들 ID 를 불러옴
         # 번들 ID: AppRun Box 에서 베이스 네임
-        self._bundle_id = self.apprun_box_path.split('/')[-1]
+        self._bundle_id = self._apprun_box_path.split('/')[-1]
 
         # 컨텍스트 기본 설정
         self.unreadable_filename: bool = False # 앱박스 내에 파일을 쓰기 할 때, 파일 명을 다이제스트 함
