@@ -29,14 +29,14 @@ if [ -f "$1/main.py" ]; then
 
         new_checksum=$(md5sum "$1/requirements.txt" | awk '{ print $1 }')
 
-        if [ "$old_checksum" == "" ]; then
+        if [[ "$old_checksum" == "" ]]; then
             echo "$new_checksum" > "$appBoxRoot/$appid/requirements.txt.checksum"
             echo "First time setup, installing dependencies..."
             echo "Running preinstallation..."
             "$appBoxRoot/$appid/pyvenv/bin/python3" -m pip install --upgrade pip setuptools wheel
             "$appBoxRoot/$appid/pyvenv/bin/python3" -m pip install -r "$1/requirements.txt"
 
-        elif [ "$old_checksum" -ne "$new_checksum" ]; then
+        elif [[ "$old_checksum" != "$new_checksum" ]]; then
             echo "$new_checksum" > "$appBoxRoot/$appid/requirements.txt.checksum"
             echo "Requirements file changed, reinstalling dependencies..."
             rm -rf "$appBoxRoot/$appid/pyvenv"
