@@ -10,17 +10,28 @@ class AppContext:
         import sys
         self._interpreter_path = sys.executable
 
-        # AppRun Box 위치 가져오기
-        # AppRun Box: 인터프리터에서 pyvenv/bin/ 를 기준으로 자른 후 앞쪽
-        self._apprun_box_path = self._interpreter_path.split('pyvenv/bin/')[0]
-
-        # 현재 번들 ID 를 불러옴
-        # 번들 ID: AppRun Box 에서 베이스 네임
-        self._bundle_id = self._apprun_box_path.split('/')[-2]
-
         # 컨텍스트 기본 설정
         self.unreadable_filename: bool = False # 앱박스 내에 파일을 쓰기 할 때, 파일 명을 다이제스트 함
-        
+
+        # 현재 인터프리터 위치에서 "pyvenv/bin/" 이 없다면 별도로 핸들링 시도
+        if 'pyvenv/bin/' not in self._interpreter_path:
+            self._apprun_box_path = os.getcwd() + '/' # 현재 작업 디렉토리를 AppRun Box 로 간주
+            self._bundle_id = self._apprun_box_path.split('/')[-2] # AppRun Box 에서 베이스 네임
+            self._is_running_in_venv = False
+
+        else:
+            # AppRun Box 위치 가져오기
+            # AppRun Box: 인터프리터에서 pyvenv/bin/ 를 기준으로 자른 후 앞쪽
+            self._apprun_box_path = self._interpreter_path.split('pyvenv/bin/')[0]
+
+            # 현재 번들 ID 를 불러옴
+            # 번들 ID: AppRun Box 에서 베이스 네임
+            self._bundle_id = self._apprun_box_path.split('/')[-2]
+
+            self._is_running_in_venv = True
+    
+    def is_venv(self):
+        return self._is_running_in_venv
 
     def interpreter(self):
         return self._interpreter_path
