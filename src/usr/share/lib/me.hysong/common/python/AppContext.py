@@ -12,7 +12,7 @@ class AppContext:
 
         # AppRun Box 위치 가져오기
         # AppRun Box: 인터프리터에서 pyvenv/bin/ 를 기준으로 자른 후 앞쪽
-        self._apprun_box_path = self.interpreter_path.split('pyvenv/bin/')[0]
+        self._apprun_box_path = self._interpreter_path.split('pyvenv/bin/')[0]
 
         # 현재 번들 ID 를 불러옴
         # 번들 ID: AppRun Box 에서 베이스 네임
