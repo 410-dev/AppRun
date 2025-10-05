@@ -32,6 +32,7 @@ class AppContext:
         # 엔트리 스크립트 및 번들 경로 계산
         self._entry_script_path = self._detect_entry_script()
         self._bundle_path = self._compute_bundle_path(self._entry_script_path)
+        self._pid = os.getpid()
 
     # ---------- 내부 유틸 ----------
 
@@ -96,6 +97,9 @@ class AppContext:
 
     def id(self):
         return self._bundle_id
+    
+    def pid(self):
+        return self._pid
 
     def bundle(self):
         """
