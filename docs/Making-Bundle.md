@@ -13,8 +13,13 @@ MyPythonApplication.apprun
 \
  main.py          [필수, 실행 파일]
  requirements.txt [선택, 의존성 파일]
- libs             [선택, 라이브러리 레퍼런스 파일]
- id               [선택, 번들 ID 파일]
+ AppRunMeta
+ \
+  libs              [선택      , 라이브러리 레퍼런스 파일]
+  id                [선택 (권장), 번들 ID 파일]
+  DesktopLink       [선택      , .desktop 파일 내용]
+  EnforceRootLaunch [선택      , 존재시 번들 실행을 sudo 로 실행함]
+  KeepEnvironment   [선택      , 존재시 EnforceRootLaunch 에서 sudo -E 효과를 냄]
 ```
 
 ## 실행 파일
