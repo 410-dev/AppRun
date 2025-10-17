@@ -42,6 +42,7 @@ if [ -f "$1/main.py" ]; then
             "$appBoxRoot/$appid/pyvenv/bin/python3" -m pip install --upgrade pip setuptools wheel
             "$appBoxRoot/$appid/pyvenv/bin/python3" -m pip install -r "$1/requirements.txt"
             echo "$new_checksum" > "$appBoxRoot/$appid/requirements.txt.checksum"
+            notify-send "[AppRun] Dependencies Installed" "Dependencies for $appid have been installed."
         elif [[ "$old_checksum" != "$new_checksum" ]]; then
             echo "Requirements file changed, reinstalling dependencies..."
             notify-send "[AppRun] Updating Dependencies" "Dependencies for $appid have changed. Reinstalling. This may take a while."
@@ -51,6 +52,7 @@ if [ -f "$1/main.py" ]; then
             "$appBoxRoot/$appid/pyvenv/bin/python3" -m pip install --upgrade pip setuptools wheel
             "$appBoxRoot/$appid/pyvenv/bin/python3" -m pip install -r "$1/requirements.txt"
             echo "$new_checksum" > "$appBoxRoot/$appid/requirements.txt.checksum"
+            notify-send "[AppRun] Dependencies Updated" "Dependencies for $appid have been updated."
         fi
     fi
 fi
