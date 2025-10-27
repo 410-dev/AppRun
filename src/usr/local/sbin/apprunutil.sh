@@ -12,6 +12,7 @@ if [[ "$1" == "Help" ]] || [[ "$1" == "--help" ]] || [[ "$1" == "-h" ]]; then
     echo "  GetProperty [AppRunPath] [PropertyName]   Get the value of a specific property from the AppRun"
     echo "  ListProperties [AppRunPath]               List all properties in the AppRun"
     echo "  ViewProperties [AppRunPath]               View all properties and their values in the AppRun"
+    echo "  BundleInfo [AppRunPath]                   Show bundle information"
     echo ""
 elif [[ "$1" == "Prepare" ]]; then
     # Call /usr/local/sbin/apprun-prepare.sh
@@ -37,9 +38,13 @@ elif [[ "$1" == "GetProperty" ]]; then
     fi
 elif [[ "$1" == "ListProperties" ]]; then
     # List all properties in the AppRunMeta directory
+    # There could be subdirectories - find it recursively while containing the directory name
     APP_RUN_PATH="$2"
     if [[ -d "$APP_RUN_PATH/AppRunMeta" ]]; then
-        ls -1 "$APP_RUN_PATH/AppRunMeta"
+        find "$APP_RUN_PATH/AppRunMeta" -type f | while read -r file; do
+            PROPERTY_NAME=$(realpath --relative-to="$APP_RUN_PATH/AppRunMeta" "$file")
+            echo "$PROPERTY_NAME"
+        done
     fi
 elif [[ "$1" == "ViewProperties" ]]; then
     # View all properties and their values in the AppRunMeta directory
@@ -51,6 +56,66 @@ elif [[ "$1" == "ViewProperties" ]]; then
             echo "$PROPERTY_NAME: $PROPERTY_VALUE"
         done
     fi
+elif [[ "$1" == "BundleInfo" ]]; then
+    # Show bundle info
+    #   Format (If contains AppRunMeta/id file then it is format 2. If it contains just id file then it is format 1 which does not show any further information other than id)
+    #   ID (from AppRunMeta/id or ./id) [Format 1 shows this only]
+    #   Version (from AppRunMeta/Version or AppRunMeta/DesktopLink/Version)
+    #   Name (from AppRunMeta/DesktopLink/Name or AppRunMeta/Name)
+    #   Library loads (from AppRunMeta/libs)
+    #   Application Type (Any of Java, Python, Bash, Binary - Type identified by extension of main file in the bundle root)
+
+    APP_RUN_PATH="$2"
+    if [[ -f "$APP_RUN_PATH/AppRunMeta/id" ]]; then
+        echo "Format: 2"
+        echo "ID: $(cat "$APP_RUN_PATH/AppRunMeta/id")"
+    elif [[ -f "$APP_RUN_PATH/id" ]]; then
+        echo "Format: 1"
+        echo "ID: $(cat "$APP_RUN_PATH/id")"
+    else
+        echo "Unidentifiable format."
+        exit 1
+    fi
+
+    if [[ -f "$APP_RUN_PATH/AppRunMeta/Version" ]]; then
+        echo "Version: $(cat "$APP_RUN_PATH/AppRunMeta/Version")"
+    elif [[ -f "$APP_RUN_PATH/AppRunMeta/DesktopLink/Version" ]]; then
+        echo "Version: $(cat "$APP_RUN_PATH/AppRunMeta/DesktopLink/Version")"
+    fi
+
+    if [[ -f "$APP_RUN_PATH/AppRunMeta/DesktopLink/Name" ]]; then
+        echo "Name: $(cat "$APP_RUN_PATH/AppRunMeta/DesktopLink/Name")"
+    elif [[ -f "$APP_RUN_PATH/AppRunMeta/Name" ]]; then
+        echo "Name: $(cat "$APP_RUN_PATH/AppRunMeta/Name")"
+    fi
+
+    if [[ -f "$APP_RUN_PATH/AppRunMeta/libs" ]]; then
+        echo "Library loads:"
+        cat "$APP_RUN_PATH/AppRunMeta/libs"
+    fi
+
+    # Determine Application Type
+    MAIN_FILE=$(find "$APP_RUN_PATH" -maxdepth 1 -type f ! -name "AppRunMeta" ! -name "id" | head -n 1)
+    if [[ -n "$MAIN_FILE" ]]; then
+        EXTENSION="${MAIN_FILE##*.}"
+        case "$EXTENSION" in
+            jar)
+                echo "Application Type: Java"
+                ;;
+            py)
+                echo "Application Type: Python"
+                ;;
+            sh)
+                echo "Application Type: Bash"
+                ;;
+            *)
+                echo "Application Type: Binary"
+                ;;
+        esac
+    fi
+    
+    exit 0
+
 else
     echo "Unknown command. Use 'apprunutil.sh Help' for usage information."
 fi
