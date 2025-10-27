@@ -7,10 +7,12 @@ if [[ ! -d "$appBoxRoot" ]]; then
     mkdir -p "$appBoxRoot"
 fi
 
-if [[ ! -f "$1/main.py" ]] && [[ ! -f "$1/main.sh" ]] && [[ ! -f "$1/main.jar" ]] && [[ ! -x "$1/main" ]]; then
-    notify-send "[AppRun] App Preparation Failed" "No valid entry file found in $1"
-    echo "No main.py, main.sh, main.jar, or executable main file found in $1. Skipping preparation."
-    exit 9
+if [[ -d "$1" ]]; then
+    if [[ ! -f "$1/main.py" ]] && [[ ! -f "$1/main.sh" ]] && [[ ! -f "$1/main.jar" ]] && [[ ! -x "$1/main" ]]; then
+        notify-send "[AppRun] App Preparation Failed" "No valid entry file found in $1"
+        echo "No main.py, main.sh, main.jar, or executable main file found in $1. Skipping preparation."
+        exit 9
+    fi
 fi
 
 if [[ ! -d "$appBoxRoot/$appid" ]]; then

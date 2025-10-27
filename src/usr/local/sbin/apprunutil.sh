@@ -16,8 +16,8 @@ if [[ "$1" == "Help" ]] || [[ "$1" == "--help" ]] || [[ "$1" == "-h" ]]; then
     echo ""
 elif [[ "$1" == "Prepare" ]]; then
     # Call /usr/local/sbin/apprun-prepare.sh
-    shift
-    /usr/local/sbin/apprun-prepare.sh "$@"
+    /usr/local/sbin/apprun-prepare.sh "$2"
+    exit $?
 elif [[ "$1" == "HasProperty" ]]; then
     # Check if the bundle has a specific property in AppRunMeta/<property name> file
     APP_RUN_PATH="$2"
@@ -33,6 +33,7 @@ elif [[ "$1" == "GetProperty" ]]; then
     PROPERTY_NAME="$3"
     if [[ -f "$APP_RUN_PATH/AppRunMeta/$PROPERTY_NAME" ]]; then
         cat "$APP_RUN_PATH/AppRunMeta/$PROPERTY_NAME"
+        echo ""
     else
         echo ""
     fi
@@ -95,23 +96,14 @@ elif [[ "$1" == "BundleInfo" ]]; then
     fi
 
     # Determine Application Type
-    MAIN_FILE=$(find "$APP_RUN_PATH" -maxdepth 1 -type f ! -name "AppRunMeta" ! -name "id" | head -n 1)
-    if [[ -n "$MAIN_FILE" ]]; then
-        EXTENSION="${MAIN_FILE##*.}"
-        case "$EXTENSION" in
-            jar)
-                echo "Application Type: Java"
-                ;;
-            py)
-                echo "Application Type: Python"
-                ;;
-            sh)
-                echo "Application Type: Bash"
-                ;;
-            *)
-                echo "Application Type: Binary"
-                ;;
-        esac
+    if [[ -f "$APP_RUN_PATH/main.jar" ]]; then
+        echo "Application Type: Java"
+    elif [[ -f "$APP_RUN_PATH/main.py" ]]; then
+        echo "Application Type: Python"
+    elif [[ -f "$APP_RUN_PATH/main.sh" ]]; then
+        echo "Application Type: Bash"
+    elif [[ -f "$APP_RUN_PATH/main" ]]; then
+        echo "Application Type: Binary"
     fi
     
     exit 0
