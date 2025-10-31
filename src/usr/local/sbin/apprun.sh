@@ -91,13 +91,11 @@ if [[ $duration -lt 1 ]] || [[ $exit_code -ne 0 ]]; then
         message="The application has exited with a non-zero exit code ($exit_code). Please check the application logs, or run the application in a terminal for more details."
     fi
 
-    if [[ -z "$DISPLAY" ]]; then
-        echo "AppRun: $message"
-    elif command -v zenity >/dev/null 2>&1; then
+    echo "AppRun: $message"
+
+    if command -v zenity >/dev/null 2>&1; then
         zenity --error --text="$message" --title="AppRun Application Crash"
     elif command -v kdialog >/dev/null 2>&1; then
         kdialog --error --text="$message" --title="AppRun Application Crash"
-    else
-        echo "AppRun: $message"
     fi
 fi
