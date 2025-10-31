@@ -178,3 +178,4 @@ class AppContext:
             f"bundle_id={self._bundle_id}"
             ")"
         )
+    
