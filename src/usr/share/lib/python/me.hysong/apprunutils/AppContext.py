@@ -167,6 +167,24 @@ class AppContext:
             return self.read_str(filename, encoding)
         except FileNotFoundError:
             return default
+        
+    def username(self) -> str:
+        # 현재 사용자 이름 반환
+        import getpass
+        return getpass.getuser()
+    
+    def euid(self) -> int:
+        # 현재 프로세스의 EUID 반환
+        return os.geteuid()
+    
+    def uid(self) -> int:
+        # 현재 프로세스의 UID 반환
+        return os.getuid()
+    
+    def userhome(self) -> str:
+        # 현재 사용자의 홈 디렉터리 반환
+        import os
+        return os.path.expanduser('~')
 
     def __str__(self):
         return (
