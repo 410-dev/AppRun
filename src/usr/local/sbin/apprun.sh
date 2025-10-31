@@ -85,7 +85,7 @@ fi
 
 # If duration is less than 1 second, assume a crash and prompt graphical message
 if [[ $duration -lt 1 ]] || [[ $exit_code -ne 0 ]]; then
-    message="The application might have been crashed immediately after launch. Please check the application logs, or run the application in a terminal for more details."
+    message="The application terminated too quickly, which may indicate a crash immediately after launch. Please check the application logs or run the application in a terminal for more details."
 
     if [[ $exit_code -ne 0 ]]; then
         message="The application has exited with a non-zero exit code ($exit_code). Please check the application logs, or run the application in a terminal for more details."
