@@ -9,9 +9,9 @@ from collections import defaultdict
 CONFIG = {
     "MakeDirectoryIfPossible": True,
     "BaseDirectory": "/home",
-    "ApplicationsDirectory": "Applications",
+    "ApplicationsDirectory": "applications",
     "ProbingIntervalSeconds": 3,
-    "GlobalApplicationProbeTargets": ["/Applications", "/opt/Applications"],
+    "GlobalApplicationProbeTargets": ["/applications", "/opt/applications"],
     # Where to persist registry of bundle->desktop links
     "RegistryDir": "/var/lib/apprun",
     "RegistryFile": "desktop-links.json",
