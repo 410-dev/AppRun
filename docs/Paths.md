@@ -7,6 +7,7 @@ AppRun 실행 파일이 위치하는 곳입니다.
 - appid
 - apprun-prepare
 - apprun
+- apprunutil
 - dictionary
 
 ## /usr/share/dictionaries/apprun-python
