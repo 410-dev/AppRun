@@ -1,9 +1,15 @@
 #!/bin/bash
 
+if [[ -z "$1" ]]; then
+    echo "Usage: apprun.sh <AppRun bundle path> [args...]"
+    exit 1
+fi
+
 /usr/local/sbin/apprun-prepare.sh "$1"
 if [ $? -ne 0 ]; then
     exit $?
 fi
+
 cmd="$1"
 shift
 
