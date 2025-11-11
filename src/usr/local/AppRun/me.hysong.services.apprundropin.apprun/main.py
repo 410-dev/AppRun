@@ -152,7 +152,7 @@ def generate_desktop_entry(property_dict: dict[str, str]) -> str:
         "Version": "1.0",
         "Comment": "",
         "Args": "",
-        "Icon": "/usr/local/AppRun/unknown-app-icon.png",
+        "Icon.png": "/usr/local/AppRun/unknown-app-icon.png",
         "Terminal": "false",
         "Type": "Application",
         "Categories": "Utility"
