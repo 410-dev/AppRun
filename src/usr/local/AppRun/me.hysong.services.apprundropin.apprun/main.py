@@ -144,8 +144,21 @@ def generate_desktop_entry(property_dict: dict[str, str]) -> str:
     # Replace any still-unset placeholders with empty strings
     # (prevents literal $Key$ leakage)
     # Identify placeholders in Template by dollar markers
-    for frag in ["Version", "Name", "Comment", "BundlePath", "Icon", "Terminal", "Type", "Categories"]:
-        desktop_entry_content = desktop_entry_content.replace(f"${frag}$", "")
+
+    # for frag in ["Version", "Name", "Comment", "BundlePath", "Icon", "Terminal", "Type", "Categories"]:
+    #     desktop_entry_content = desktop_entry_content.replace(f"${frag}$", "")
+    # return desktop_entry_content
+    fallbacks = {
+        "Version": "1.0",
+        "Comment": "",
+        "Args": "",
+        "Icon": "/usr/local/AppRun/unknown-app-icon.png",
+        "Terminal": "false",
+        "Type": "Application",
+        "Categories": "Utility"
+    }
+    for frag, default_value in fallbacks.items():
+        desktop_entry_content = desktop_entry_content.replace(f"${frag}$", default_value)
     return desktop_entry_content
 
 def build_property_dict(apprun_path: str) -> dict[str, str] | None:
