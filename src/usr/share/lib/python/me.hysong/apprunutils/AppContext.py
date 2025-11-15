@@ -186,6 +186,33 @@ class AppContext:
         import os
         return os.path.expanduser('~')
 
+    def app_exit(self, message: str = "", code: int = 0, wait_for_input: bool | None = None):
+        # 애플리케이션 종료
+        import sys
+        if message:
+            print(message)
+
+        # 만약 이 번들 타입이 Application 이고 Terminal 모드라면, 종료 전에 사용자 입력 대기
+        if wait_for_input is None:
+            wait_for_input = os.isatty(sys.stdin.fileno()) and os.isatty(sys.stdout.fileno())
+
+            # 번들에서 AppRunMeta/DesktopLink/Terminal 파일이 존재하고 내부 값이 true 면 대기
+            terminal_flag_path = os.path.join(self._apprun_box_path, 'AppRunMeta', 'DesktopLink', 'Terminal')
+            if os.path.isfile(terminal_flag_path):
+                try:
+                    flag_value = self.read_str(terminal_flag_path).strip().lower()
+                    if flag_value in ('1', 'true', 'yes', 'on'):
+                        wait_for_input = True
+                    elif flag_value in ('0', 'false', 'no', 'off'):
+                        wait_for_input = False
+                except Exception:
+                    pass  # 무시하고 기본값 유지
+
+        if wait_for_input:
+            input("Press Enter to exit...")
+
+        sys.exit(code)
+
     def __str__(self):
         return (
             "AppContext("
