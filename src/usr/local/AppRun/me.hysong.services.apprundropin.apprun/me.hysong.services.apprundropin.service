@@ -1,8 +1,6 @@
 [Unit]
-Description=AppRun DropIn Service
-DefaultDependencies=no
-After=local-fs.target
-Before=multi-user.target
+Description=AppRun DropIn Serviceo
+After=graphical.target systemd-user-sessions.service
 
 [Service]
 Type=simple
@@ -11,4 +9,4 @@ WorkingDirectory=/
 ExecStart=/usr/local/sbin/apprun.sh /usr/local/AppRun/me.hysong.services.apprundropin.apprun
 
 [Install]
-WantedBy=multi-user.target
+WantedBy=graphical.target
