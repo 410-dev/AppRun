@@ -8,10 +8,6 @@ ln -s /usr/local/sbin/appid.sh /usr/local/bin/appid
 ln -s /usr/local/sbin/apprun-prepare.sh /usr/local/bin/apprun-prepare
 ln -s /usr/local/sbin/dictionary.py /usr/local/bin/dictionary
 
-if [[ -f /tmp/DoNotEnableAppRunDropInService ]]; then
-    rm /tmp/DoNotEnableAppRunDropInService
-    exit 0
-fi
-
+/usr/local/sbin/apprun-prepare.sh "/usr/local/AppRun/me.hysong.services.apprundropin.apprun"
 systemctl enable /usr/local/AppRun/me.hysong.services.apprundropin.apprun/me.hysong.services.apprundropin.service
 systemctl start me.hysong.services.apprundropin.service
