@@ -79,7 +79,7 @@ elif [ -x "$cmd/main" ]; then
         exit_code=$?
     fi
 else
-    echo "No valid main file found to execute."
+    echo "No valid main file found to execute in bundle: $cmd"
     exit 10
 fi
 
@@ -95,16 +95,20 @@ fi
 # If duration is less than 1 second, assume a crash and prompt graphical message
 if [[ $duration -lt 1 ]] || [[ $exit_code -ne 0 ]]; then
     message="The application terminated too quickly, which may indicate a crash immediately after launch. Please check the application logs or run the application in a terminal for more details."
+    title="AppRun Application Terminated Quickly"
+    option="--warning"
 
     if [[ $exit_code -ne 0 ]]; then
         message="The application has exited with a non-zero exit code ($exit_code). Please check the application logs, or run the application in a terminal for more details."
+        title="AppRun Application Crash"
+        option="--error"
     fi
 
     echo "AppRun: $message"
 
     if command -v zenity >/dev/null 2>&1; then
-        zenity --error --text="$message" --title="AppRun Application Crash"
+        zenity "$option" --text="$message" --title="$title"
     elif command -v kdialog >/dev/null 2>&1; then
-        kdialog --error --text="$message" --title="AppRun Application Crash"
+        kdialog "$option" --text="$message" --title="$title"
     fi
 fi
