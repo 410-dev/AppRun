@@ -186,6 +186,118 @@ class AppContext:
         import os
         return os.path.expanduser('~')
 
+    def update_icon(self, window=None):
+        """
+        AppRun 번들의 아이콘을 찾아 윈도우 타이틀바 아이콘으로 설정합니다.
+        지원: Tkinter, PyQt5, PyQt6, PySide2, PySide6 (Linux Gnome 호환 패치 포함)
+        """
+        import os
+        import sys
+        import subprocess
+
+        icon_path = os.path.join(self._bundle_path, "AppRunMeta", "DesktopLink", "Icon.png")
+
+        if not os.path.isfile(icon_path):
+            return False
+
+        # 성공 여부 추적
+        success = False
+        target_window = None
+        target_window_id = None  # X11 Window ID (Linux용)
+
+        # ---------------------------------------------------------
+        # A. Tkinter 지원
+        # ---------------------------------------------------------
+        if 'tkinter' in sys.modules or (window and hasattr(window, 'iconphoto')):
+            try:
+                import tkinter as tk
+                target_window = window
+                if target_window is None:
+                    if hasattr(tk, "_default_root") and tk._default_root:
+                        target_window = tk._default_root
+
+                if target_window and hasattr(target_window, 'iconphoto'):
+                    img = tk.PhotoImage(file=icon_path)
+                    target_window.iconphoto(True, img)
+                    target_window._apprun_icon_ref = img
+
+                    # Linux xprop을 위해 Window ID 확보
+                    # (주의: 창이 아직 화면에 안 떴으면 id가 0일 수도 있음. update_idletasks로 강제 할당 시도)
+                    try:
+                        target_window.update_idletasks()
+                        target_window_id = target_window.winfo_id()
+                    except Exception:
+                        pass
+
+                    success = True
+            except Exception:
+                pass
+
+        # ---------------------------------------------------------
+        # B. Qt 지원 (PyQt/PySide)
+        # ---------------------------------------------------------
+        if not success:
+            qt_libs = ['PyQt6', 'PySide6', 'PyQt5', 'PySide2']
+            target_lib = None
+
+            if window:
+                module_name = window.__class__.__module__
+                for lib in qt_libs:
+                    if module_name.startswith(lib):
+                        target_lib = lib
+                        break
+
+            if not target_lib:
+                for lib in qt_libs:
+                    if f"{lib}.QtWidgets" in sys.modules:
+                        target_lib = lib
+                        break
+
+            if target_lib:
+                try:
+                    QtGui = __import__(f"{target_lib}.QtGui", fromlist=['QIcon'])
+                    QtWidgets = __import__(f"{target_lib}.QtWidgets", fromlist=['QApplication'])
+                    icon = QtGui.QIcon(icon_path)
+
+                    if window and hasattr(window, 'setWindowIcon'):
+                        window.setWindowIcon(icon)
+                        try:
+                            target_window_id = window.winId()  # Qt Window ID
+                        except:
+                            pass
+
+                    app = QtWidgets.QApplication.instance()
+                    if app:
+                        app.setWindowIcon(icon)
+                        success = True
+                except Exception:
+                    pass
+
+        # ---------------------------------------------------------
+        # C. Linux Gnome 강제 적용 패치 (WM_CLASS 덮어쓰기)
+        # ---------------------------------------------------------
+        # Gnome은 WM_CLASS가 'python' 등이면 아이콘 설정을 무시함.
+        # 강제로 WM_CLASS를 Bundle ID로 변경하여 별도 앱으로 인식시킴.
+        if success and sys.platform.startswith('linux') and target_window_id:
+            try:
+                # 번들 ID를 클래스명으로 사용 (공백 제거 등 안전처리)
+                class_name = "".join(x for x in self._bundle_id if x.isalnum() or x in "_-")
+                if not class_name: class_name = "AppRunApp"
+
+                # xprop 명령어로 실행 중인 창의 속성을 강제 변경
+                # 형식: "InstanceName", "ClassName"
+                subprocess.run([
+                    'xprop',
+                    '-id', str(target_window_id),
+                    '-f', 'WM_CLASS', '8s',
+                    '-set', 'WM_CLASS',
+                    f'"{class_name}", "{class_name}"'
+                ], check=False, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            except Exception:
+                pass  # xprop이 없거나 실패해도 앱은 죽지 않아야 함
+
+        return success
+
     def app_exit(self, message: str = "", code: int = 0, wait_for_input: bool | None = None):
         # 애플리케이션 종료
         import sys
