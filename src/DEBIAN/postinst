@@ -2,11 +2,11 @@
 
 set -e
 
-ln -s /usr/local/sbin/apprun.sh /usr/local/bin/apprun
-ln -s /usr/local/sbin/apprunutil.sh /usr/local/bin/apprunutil
-ln -s /usr/local/sbin/appid.sh /usr/local/bin/appid
-ln -s /usr/local/sbin/apprun-prepare.sh /usr/local/bin/apprun-prepare
-ln -s /usr/local/sbin/dictionary.py /usr/local/bin/dictionary
+ln -sf /usr/local/sbin/apprun.sh /usr/local/bin/apprun
+ln -sf /usr/local/sbin/apprunutil.sh /usr/local/bin/apprunutil
+ln -sf /usr/local/sbin/appid.sh /usr/local/bin/appid
+ln -sf /usr/local/sbin/apprun-prepare.sh /usr/local/bin/apprun-prepare
+ln -sf /usr/local/sbin/dictionary.py /usr/local/bin/dictionary
 
 /usr/local/sbin/apprun-prepare.sh "/usr/local/AppRun/me.hysong.services.apprundropin.apprun"
 systemctl enable /usr/local/AppRun/me.hysong.services.apprundropin.apprun/me.hysong.services.apprundropin.service
