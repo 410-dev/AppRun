@@ -170,6 +170,6 @@ if [[ "$APP_TYPE" == "Application" ]]; then
 
         show_gui_alert "$title" "$message" "$option"
     fi
-f
+fi
 
 exit $exit_code

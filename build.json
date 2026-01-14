@@ -3,7 +3,6 @@
     "AsSubmoduleBuildMap": {
         "ubuntu": {
             "DEBIAN/postinst": "package-meta/ubuntu/postinst.d/1-apprun-install.sh",
-            "DEBIAN/prerm": "package-meta/ubuntu/prerm.d/1-apprun-install.sh",
             "usr": "frameworks/AppRun.build/_overlay/usr",
             "var": "frameworks/AppRun.build/_overlay/var"
         }
