@@ -4,6 +4,16 @@ set -e
 
 curl -LsSf https://astral.sh/uv/install.sh | sh
 
+# Move $HOME/.local/bin/uv to /usr/local/bin/uv
+if [ -f "$HOME/.local/bin/uv" ]; then
+    mv "$HOME/.local/bin/uv" /usr/local/bin/uv
+fi
+# Move $HOME/.local/bin/uvx to /usr/local/bin/uvx
+if [ -f "$HOME/.local/bin/uvx" ]; then
+    mv "$HOME/.local/bin/uvx" /usr/local/bin/uvx
+fi
+
+
 ln -sf /usr/local/sbin/apprun.sh /usr/local/bin/apprun
 ln -sf /usr/local/sbin/apprunutil.sh /usr/local/bin/apprunutil
 ln -sf /usr/local/sbin/appid.sh /usr/local/bin/appid
