@@ -22,8 +22,11 @@ fi
 
 
 if [ -f "$1/main.py" ]; then
+#    if [ ! -f "$appBoxRoot/$appid/pyvenv/bin/python3" ]; then
+#        python3 -m venv "$appBoxRoot/$appid/pyvenv"
+#    fi
     if [ ! -f "$appBoxRoot/$appid/pyvenv/bin/python3" ]; then
-        python3 -m venv "$appBoxRoot/$appid/pyvenv"
+        uv venv "$appBoxRoot/$appid/pyvenv"
     fi
 
     if [ -f "$1/requirements.txt" ]; then
@@ -41,8 +44,12 @@ if [ -f "$1/main.py" ]; then
             echo "First time setup, installing dependencies..."
             echo "Running preinstallation..."
             notify-send "[AppRun] Installing Dependencies" "Installing dependencies for $appid. This may take a while."
-            "$appBoxRoot/$appid/pyvenv/bin/python3" -m pip install --upgrade pip setuptools wheel
-            "$appBoxRoot/$appid/pyvenv/bin/python3" -m pip install -r "$1/requirements.txt"
+#            "$appBoxRoot/$appid/pyvenv/bin/python3" -m pip install --upgrade pip setuptools wheel
+#            "$appBoxRoot/$appid/pyvenv/bin/python3" -m pip install -r "$1/requirements.txt"
+
+            # Using uv to install dependencies
+            uv pip install --python "$appBoxRoot/$appid/pyvenv/bin/python3" -r "$1/requirements.txt"
+
             echo "$new_checksum" > "$appBoxRoot/$appid/requirements.txt.checksum"
             notify-send "[AppRun] Dependencies Installed" "Dependencies for $appid have been installed."
         elif [[ "$old_checksum" != "$new_checksum" ]]; then
@@ -51,8 +58,12 @@ if [ -f "$1/main.py" ]; then
             rm -rf "$appBoxRoot/$appid/pyvenv"
             python3 -m venv "$appBoxRoot/$appid/pyvenv"
             echo "Running preinstallation..."
-            "$appBoxRoot/$appid/pyvenv/bin/python3" -m pip install --upgrade pip setuptools wheel
-            "$appBoxRoot/$appid/pyvenv/bin/python3" -m pip install -r "$1/requirements.txt"
+#            "$appBoxRoot/$appid/pyvenv/bin/python3" -m pip install --upgrade pip setuptools wheel
+#            "$appBoxRoot/$appid/pyvenv/bin/python3" -m pip install -r "$1/requirements.txt"
+
+            # Using uv to install dependencies
+            uv pip install --python "$appBoxRoot/$appid/pyvenv/bin/python3" -r "$1/requirements.txt"
+
             echo "$new_checksum" > "$appBoxRoot/$appid/requirements.txt.checksum"
             notify-send "[AppRun] Dependencies Updated" "Dependencies for $appid have been updated."
         fi

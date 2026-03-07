@@ -2,6 +2,8 @@
 
 set -e
 
+curl -LsSf https://astral.sh/uv/install.sh | sh
+
 ln -sf /usr/local/sbin/apprun.sh /usr/local/bin/apprun
 ln -sf /usr/local/sbin/apprunutil.sh /usr/local/bin/apprunutil
 ln -sf /usr/local/sbin/appid.sh /usr/local/bin/appid
