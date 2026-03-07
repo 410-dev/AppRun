@@ -7,7 +7,7 @@ import argparse
 from collections import defaultdict
 
 def simple_reg_loader(key: str, rtype: str, default):
-    path = "/var/noinstfs/aqua/root.d/registry/SYSTEM/AppRun/DropInServiceConfigs/" + key + "." + rtype + ".rv"
+    path = "/tmp/registry/SYSTEM/AppRun/DropInServiceConfigs/" + key + "." + rtype + ".rv"
     try:
         with open(path, "r", encoding="utf-8") as f:
             data = f.read()
@@ -29,7 +29,7 @@ def simple_reg_loader(key: str, rtype: str, default):
     return default
 
 # Load service configurations
-# Path: /var/noinstfs/aqua/root.d/registry/SYSTEM/AppRun/DropInServiceConfigs/<key>.<type>.rv
+# Path: /tmp/registry/SYSTEM/AppRun/DropInServiceConfigs/<key>.<type>.rv
 MakeDirectoryIfPossible: bool = simple_reg_loader("MakeDirectoryIfPossible", "bool", True)
 BaseDirectory: str = simple_reg_loader("BaseDirectory", "str", "/home")
 ApplicationsDirectory: str = simple_reg_loader("ApplicationsDirectory", "str", "applications")
