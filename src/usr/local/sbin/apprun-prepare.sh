@@ -26,7 +26,7 @@ if [ -f "$1/main.py" ]; then
 #        python3 -m venv "$appBoxRoot/$appid/pyvenv"
 #    fi
     if [ ! -f "$appBoxRoot/$appid/pyvenv/bin/python3" ]; then
-        uv venv "$appBoxRoot/$appid/pyvenv"
+        /usr/local/bin/uv venv "$appBoxRoot/$appid/pyvenv"
     fi
 
     if [ -f "$1/requirements.txt" ]; then
