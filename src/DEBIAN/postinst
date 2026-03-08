@@ -20,6 +20,6 @@ ln -sf /usr/local/sbin/appid.sh /usr/local/bin/appid
 ln -sf /usr/local/sbin/apprun-prepare.sh /usr/local/bin/apprun-prepare
 ln -sf /usr/local/sbin/dictionary.py /usr/local/bin/dictionary
 
-/usr/local/sbin/apprun-prepare.sh "/usr/local/AppRun/me.hysong.services.apprundropin.apprun"
-systemctl enable /usr/local/AppRun/me.hysong.services.apprundropin.apprun/me.hysong.services.apprundropin.service
-systemctl start me.hysong.services.apprundropin.service
+/usr/local/sbin/apprun-prepare.sh "/usr/local/AppRun/apprundropin.apprun"
+systemctl enable /usr/local/AppRun/apprundropin.apprun/apprundropin.service
+systemctl start apprundropin.service

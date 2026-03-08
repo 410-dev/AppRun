@@ -6,7 +6,7 @@ After=graphical.target systemd-user-sessions.service
 Type=simple
 User=root
 WorkingDirectory=/
-ExecStart=/usr/local/sbin/apprun.sh /usr/local/AppRun/me.hysong.services.apprundropin.apprun
+ExecStart=/usr/local/sbin/apprun.sh /usr/local/AppRun/apprundropin.apprun
 
 [Install]
 WantedBy=graphical.target

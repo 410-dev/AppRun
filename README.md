@@ -30,8 +30,8 @@ ln -sf /usr/local/sbin/apprunutil.sh /usr/local/bin/apprunutil
 ln -sf /usr/local/sbin/appid.sh /usr/local/bin/appid
 ln -sf /usr/local/sbin/apprun-prepare.sh /usr/local/bin/apprun-prepare
 ln -sf /usr/local/sbin/dictionary.py /usr/local/bin/dictionary
-sudo systemctl enable /usr/local/AppRun/me.hysong.services.apprundropin.apprun/me.hysong.services.apprundropin.service
-sudo systemctl start me.hysong.services.apprundropin.service
+sudo systemctl enable /usr/local/AppRun/apprundropin.apprun/apprundropin.service
+sudo systemctl start apprundropin.service
 ```
 
 
