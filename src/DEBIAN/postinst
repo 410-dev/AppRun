@@ -7,10 +7,17 @@ curl -LsSf https://astral.sh/uv/install.sh | sh
 # Move $HOME/.local/bin/uv to /usr/local/bin/uv
 if [ -f "$HOME/.local/bin/uv" ]; then
     mv "$HOME/.local/bin/uv" /usr/local/bin/uv
+else
+    echo "Error: uv was not found in $HOME/.local/bin/uv"
+    exit 1
 fi
+
 # Move $HOME/.local/bin/uvx to /usr/local/bin/uvx
 if [ -f "$HOME/.local/bin/uvx" ]; then
     mv "$HOME/.local/bin/uvx" /usr/local/bin/uvx
+else
+    echo "Error: uvx was not found in $HOME/.local/bin/uvx"
+    exit 1
 fi
 
 

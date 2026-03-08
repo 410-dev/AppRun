@@ -48,7 +48,7 @@ if [ -f "$1/main.py" ]; then
 #            "$appBoxRoot/$appid/pyvenv/bin/python3" -m pip install -r "$1/requirements.txt"
 
             # Using uv to install dependencies
-            uv pip install --python "$appBoxRoot/$appid/pyvenv/bin/python3" -r "$1/requirements.txt"
+            /usr/local/bin/uv pip install --python "$appBoxRoot/$appid/pyvenv/bin/python3" -r "$1/requirements.txt"
 
             echo "$new_checksum" > "$appBoxRoot/$appid/requirements.txt.checksum"
             notify-send "[AppRun] Dependencies Installed" "Dependencies for $appid have been installed."
@@ -62,7 +62,7 @@ if [ -f "$1/main.py" ]; then
 #            "$appBoxRoot/$appid/pyvenv/bin/python3" -m pip install -r "$1/requirements.txt"
 
             # Using uv to install dependencies
-            uv pip install --python "$appBoxRoot/$appid/pyvenv/bin/python3" -r "$1/requirements.txt"
+            /usr/local/bin/uv pip install --python "$appBoxRoot/$appid/pyvenv/bin/python3" -r "$1/requirements.txt"
 
             echo "$new_checksum" > "$appBoxRoot/$appid/requirements.txt.checksum"
             notify-send "[AppRun] Dependencies Updated" "Dependencies for $appid have been updated."
