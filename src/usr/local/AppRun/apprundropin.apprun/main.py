@@ -7,7 +7,16 @@ import argparse
 from collections import defaultdict
 
 def simple_reg_loader(key: str, rtype: str, default):
-    path = "/tmp/registry/SYSTEM/AppRun/DropInServiceConfigs/" + key + "." + rtype + ".rv"
+    regpath = "SYSTEM/Frameworks/AppRun/DropInServiceConfigs/" + key + "." + rtype + ".rv"
+    path1 = "/tmp/registry/"
+    path2 = "/etc/aqua/registry/"
+    if os.path.isdir(path1):
+        path = os.path.join(path1, regpath)
+    elif os.path.isdir(path2):
+        path = os.path.join(path2, regpath)
+    else:
+        return default
+
     try:
         with open(path, "r", encoding="utf-8") as f:
             data = f.read()
