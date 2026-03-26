@@ -1,5 +1,5 @@
 [Unit]
-Description=AppRun DropIn Serviceo
+Description=AppRun DropIn Service
 After=graphical.target systemd-user-sessions.service
 
 [Service]

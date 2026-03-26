@@ -1,5 +1,10 @@
 #!/bin/bash
 
+if [[ "$1" == *.apprunx ]]; then
+    echo "Error: Format 3 (.apprunx) 은 'apprun3 --prepare' 를 사용하세요." >&2
+    exit 1
+fi
+
 appid="$(/usr/bin/appid.sh "$1")"
 appBoxRoot="$(getent passwd $(whoami) | cut -f6 -d:)/.local/apprun/boxes/"
 

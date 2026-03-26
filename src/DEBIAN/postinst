@@ -21,12 +21,42 @@ else
 fi
 
 
-ln -sf /usr/bin/apprun.sh /usr/local/bin/apprun
-ln -sf /usr/bin/apprunutil.sh /usr/local/bin/apprunutil
-ln -sf /usr/bin/appid.sh /usr/local/bin/appid
-ln -sf /usr/bin/apprun-prepare.sh /usr/local/bin/apprun-prepare
-ln -sf /usr/bin/dictionary.py /usr/local/bin/dictionary
+# files
+orig_files_map_to=(
+    "appid"
+    "apprun"
+    "apprun3"
+    "apprun3-package"
+    "apprun-prepare"
+    "apprunutil"
+    "apprunx-thumbnailer"
+    "dictionary"
+)
+
+for file in "${orig_files_map_to[@]}"; do
+    if [ -f "/usr/bin/${file}.py" ]; then
+        chmod +x "/usr/bin/${file}.py"
+        ln -sf "/usr/bin/${file}.py" "/usr/bin/${file}"
+    elif [ -f "/usr/bin/${file}.sh" ]; then
+        chmod +x "/usr/bin/${file}.sh"
+        ln -sf "/usr/bin/${file}.sh" "/usr/bin/${file}"
+    else
+        echo "Error: ${file} was not found in /usr/bin/"
+        exit 1
+    fi
+done
+
 
 /usr/bin/apprun-prepare.sh "/usr/lib/AppRun/apprundropin.apprun"
 systemctl enable /usr/lib/AppRun/apprundropin.apprun/apprundropin.service
 systemctl start apprundropin.service
+
+
+# Update the MIME database and icon caches, and clear thumbnail cache
+sudo update-mime-database /usr/share/mime
+sudo update-icon-caches /usr/share/icons
+sudo update-desktop-database /usr/share/applications
+xdg-mime default apprun3.desktop application/x-apprunx
+rm -rf ~/.cache/thumbnails/
+
+echo "Please restart Nautilus using 'nautilus -q && nautilus &' to apply the changes."

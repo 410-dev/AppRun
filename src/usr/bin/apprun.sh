@@ -31,6 +31,15 @@ BUNDLE_PATH="$1"
 META_DIR="$BUNDLE_PATH/AppRunMeta"
 shift # Remove bundle path from args, leaving only application arguments
 
+# Check format 3
+if [[ "$(python3 /usr/bin/apprun3.py --is-format3 "$BUNDLE_PATH")" == "true" ]]; then
+    # Pass handling to apprun3
+    python3 /usr/bin/apprun3.py --prepare "$BUNDLE_PATH"
+    # Launch apprun3
+    python3 /usr/bin/apprun3.py "$BUNDLE_PATH" "$@"
+    exit $?
+fi
+
 # Run preparation script
 /usr/bin/apprun-prepare.sh "$BUNDLE_PATH"
 if [ $? -ne 0 ]; then
