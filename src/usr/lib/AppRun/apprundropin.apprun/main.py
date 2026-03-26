@@ -8,7 +8,7 @@ import sys
 from collections import defaultdict
 import libapplog as log
 
-from frameworks.AppRun.src.usr.lib.AppRun.libs.AppContext import AppContext
+from AppContext import AppContext
 
 ctx = AppContext()
 # ctx.write_str("LOGGER_CONFIG_ENABLE_DEBUG", "1")
@@ -213,7 +213,7 @@ def generate_desktop_entry(property_dict: dict[str, str]) -> str:
 
     fallbacks = {
         "Version": "1.0", "Comment": "", "Args": "",
-        "Icon.png": "/usr/share/AppRun/unknown-app-icon.png",
+        "Icon.png": "/usr/share/apprun/default-icon.png",
         "Terminal": "false", "Type": "Application", "Categories": "Utility"
     }
     for frag, default_value in fallbacks.items():

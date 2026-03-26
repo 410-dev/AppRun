@@ -1,5 +1,5 @@
 from frameworks.AppRun.src.usr.lib.AppRun.libs import import_test
-from frameworks.AppRun.src.usr.lib.AppRun.libs.AppContext import AppContext
+from AppContext import AppContext
 
 import_test.test()
 
