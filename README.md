@@ -25,12 +25,12 @@ sudo apt install ./apprun.deb
 4. usr/share/ 디렉터리의 내용물을 모두 /usr/share 로 복사합니다.
 5. 다음 명령을 실행합니다:
 ```bash
-ln -sf /usr/local/sbin/apprun.sh /usr/local/bin/apprun
-ln -sf /usr/local/sbin/apprunutil.sh /usr/local/bin/apprunutil
-ln -sf /usr/local/sbin/appid.sh /usr/local/bin/appid
-ln -sf /usr/local/sbin/apprun-prepare.sh /usr/local/bin/apprun-prepare
-ln -sf /usr/local/sbin/dictionary.py /usr/local/bin/dictionary
-sudo systemctl enable /usr/local/AppRun/apprundropin.apprun/apprundropin.service
+ln -sf /usr/bin/apprun.sh /usr/local/bin/apprun
+ln -sf /usr/bin/apprunutil.sh /usr/local/bin/apprunutil
+ln -sf /usr/bin/appid.sh /usr/local/bin/appid
+ln -sf /usr/bin/apprun-prepare.sh /usr/local/bin/apprun-prepare
+ln -sf /usr/bin/dictionary.py /usr/local/bin/dictionary
+sudo systemctl enable /usr/lib/AppRun/apprundropin.apprun/apprundropin.service
 sudo systemctl start apprundropin.service
 ```
 

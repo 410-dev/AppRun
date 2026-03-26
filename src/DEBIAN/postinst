@@ -21,12 +21,12 @@ else
 fi
 
 
-ln -sf /usr/local/sbin/apprun.sh /usr/local/bin/apprun
-ln -sf /usr/local/sbin/apprunutil.sh /usr/local/bin/apprunutil
-ln -sf /usr/local/sbin/appid.sh /usr/local/bin/appid
-ln -sf /usr/local/sbin/apprun-prepare.sh /usr/local/bin/apprun-prepare
-ln -sf /usr/local/sbin/dictionary.py /usr/local/bin/dictionary
+ln -sf /usr/bin/apprun.sh /usr/local/bin/apprun
+ln -sf /usr/bin/apprunutil.sh /usr/local/bin/apprunutil
+ln -sf /usr/bin/appid.sh /usr/local/bin/appid
+ln -sf /usr/bin/apprun-prepare.sh /usr/local/bin/apprun-prepare
+ln -sf /usr/bin/dictionary.py /usr/local/bin/dictionary
 
-/usr/local/sbin/apprun-prepare.sh "/usr/local/AppRun/apprundropin.apprun"
-systemctl enable /usr/local/AppRun/apprundropin.apprun/apprundropin.service
+/usr/bin/apprun-prepare.sh "/usr/lib/AppRun/apprundropin.apprun"
+systemctl enable /usr/lib/AppRun/apprundropin.apprun/apprundropin.service
 systemctl start apprundropin.service

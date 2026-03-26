@@ -21,7 +21,7 @@ me.hysong.common@python
 ```
 
 ## Collection ID 등록
-Collection ID 는 `/usr/local/sbin/dictionary.py` 에 의해 읽어집니다. 
+Collection ID 는 `/usr/bin/dictionary.py` 에 의해 읽어집니다. 
 
 Collection ID 등록을 위해선 다음과 같은 파일을 우선 작성합니다:
 ```json

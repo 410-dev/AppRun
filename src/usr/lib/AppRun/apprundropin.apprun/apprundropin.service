@@ -6,7 +6,7 @@ After=graphical.target systemd-user-sessions.service
 Type=simple
 User=root
 WorkingDirectory=/
-ExecStart=/usr/local/sbin/apprun.sh /usr/local/AppRun/apprundropin.apprun --backend inotify-experimental
+ExecStart=/usr/bin/apprun.sh /usr/lib/AppRun/apprundropin.apprun --backend inotify-experimental
 
 [Install]
 WantedBy=graphical.target

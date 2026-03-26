@@ -8,7 +8,7 @@ import sys
 from collections import defaultdict
 import libapplog as log
 
-from AppContext import AppContext
+from frameworks.AppRun.src.usr.lib.AppRun.libs.AppContext import AppContext
 
 ctx = AppContext()
 # ctx.write_str("LOGGER_CONFIG_ENABLE_DEBUG", "1")
@@ -72,7 +72,7 @@ Template = """
 Version=$Version$
 Name=$Name$
 Comment=$Comment$
-Exec=/usr/local/sbin/apprun.sh "$BundlePath$" $Args$
+Exec=/usr/bin/apprun.sh "$BundlePath$" $Args$
 Icon=$Icon.png$
 Terminal=$Terminal$
 Type=Application
@@ -226,7 +226,7 @@ def generate_desktop_entry(property_dict: dict[str, str]) -> str:
 
 def build_property_dict(apprun_path: str) -> dict[str, str] | None:
     result = subprocess.run(
-        ["/usr/local/sbin/apprunutil.sh", "BundleInfo", apprun_path],
+        ["/usr/bin/apprunutil.sh", "BundleInfo", apprun_path],
         capture_output=True, text=True
     )
     log.debug(f"Building property dict for {apprun_path}")

@@ -1,4 +1,4 @@
-from AppContext import AppContext
+from frameworks.AppRun.src.usr.lib.AppRun.libs.AppContext import AppContext
 
 import os
 import time

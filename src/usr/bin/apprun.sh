@@ -32,7 +32,7 @@ META_DIR="$BUNDLE_PATH/AppRunMeta"
 shift # Remove bundle path from args, leaving only application arguments
 
 # Run preparation script
-/usr/local/sbin/apprun-prepare.sh "$BUNDLE_PATH"
+/usr/bin/apprun-prepare.sh "$BUNDLE_PATH"
 if [ $? -ne 0 ]; then
     exit $?
 fi
@@ -56,12 +56,12 @@ if [ -f "$BUNDLE_PATH/main.py" ]; then
 
     if [[ -n "$LIBS_FILE" ]]; then
         DICT_VAL="$(cat "$LIBS_FILE")"
-        PYTHON_PATH_ADD="$(/usr/bin/python3 /usr/local/sbin/dictionary.py --dict-collection=apprun-python --string="$DICT_VAL")"
+        PYTHON_PATH_ADD="$(/usr/bin/python3 /usr/bin/dictionary.py --dict-collection=apprun-python --string="$DICT_VAL")"
         export PYTHONPATH="$PYTHON_PATH_ADD:$PYTHONPATH"
     fi
 
     # Define Python Interpreter
-    APP_ID="$(/usr/local/sbin/appid.sh "$BUNDLE_PATH")"
+    APP_ID="$(/usr/bin/appid.sh "$BUNDLE_PATH")"
     INTERPRETER="$BOX_PATH/$APP_ID/pyvenv/bin/python3"
 
     CMD_ARRAY=("$INTERPRETER" "$BUNDLE_PATH/main.py")
@@ -149,7 +149,7 @@ duration=$((end_time - start_time))
 # ==============================================================================
 
 # Check if we need to perform crash detection (Only for Application type)
-APP_TYPE="$(/usr/local/sbin/apprunutil.sh GetProperty "$BUNDLE_PATH" "DesktopLink/Type")"
+APP_TYPE="$(/usr/bin/apprunutil.sh GetProperty "$BUNDLE_PATH" "DesktopLink/Type")"
 
 if [[ "$APP_TYPE" == "Application" ]]; then
     # If exited with error OR (duration < 1s and not a clean exit)

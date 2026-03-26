@@ -1,6 +1,6 @@
 #!/bin/bash
 
-appid="$(/usr/local/sbin/appid.sh "$1")"
+appid="$(/usr/bin/appid.sh "$1")"
 appBoxRoot="$(getent passwd $(whoami) | cut -f6 -d:)/.local/apprun/boxes/"
 
 if [[ ! -d "$appBoxRoot" ]]; then

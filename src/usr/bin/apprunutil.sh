@@ -20,8 +20,8 @@ if [[ "$1" == "Help" ]] || [[ "$1" == "--help" ]] || [[ "$1" == "-h" ]]; then
     echo "  BundleInfo [AppRunPath]                   Show bundle information"
     echo ""
 elif [[ "$1" == "Prepare" ]]; then
-    # Call /usr/local/sbin/apprun-prepare.sh
-    /usr/local/sbin/apprun-prepare.sh "$2"
+    # Call /usr/bin/apprun-prepare.sh
+    /usr/bin/apprun-prepare.sh "$2"
     exit $?
 elif [[ "$1" == "HasProperty" ]]; then
     # Check if the bundle has a specific property in AppRunMeta/<property name> file
