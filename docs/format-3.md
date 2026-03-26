@@ -33,7 +33,20 @@ AppRun 은 리눅스용 애플리케이션 번들 프레임워크입니다. macO
 
 ## 2. 설치
 
-### 의존성 패키지
+### Debian 계열
+
+```bash
+# 빌드
+./build.sh
+
+# 설치
+sudo apt install ./apprun.deb -y
+```
+
+
+### 의존성 패키지 (수동)
+
+uv 및 의존성 패키지와 MIME 업데이트 등 설치에 관련된 작업은 dpkg / apt 로 설치시 자동 수행됩니다.
 
 ```bash
 # 필수
