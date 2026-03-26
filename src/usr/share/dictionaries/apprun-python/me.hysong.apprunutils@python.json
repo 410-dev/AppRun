@@ -1,4 +1,4 @@
 {
-    "me.hysong.apprunutils": "/usr/lib/me.hysong.apprunutils",
+    "me.hysong.apprunutils": "/usr/lib/AppRun/libs",
     "system-site": "/usr/lib/python3/dist-packages"
 }
