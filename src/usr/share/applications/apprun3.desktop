@@ -1,0 +1,6 @@
+[Desktop Entry]
+Name=AppRun3
+Exec=apprun3 %f
+MimeType=application/x-apprunx;
+Type=Application
+NoDisplay=true

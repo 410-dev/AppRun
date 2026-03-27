@@ -1,12 +1,12 @@
 [Unit]
-Description=AppRun DropIn Serviceo
+Description=AppRun DropIn Service
 After=graphical.target systemd-user-sessions.service
 
 [Service]
 Type=simple
 User=root
 WorkingDirectory=/
-ExecStart=/usr/local/sbin/apprun.sh /usr/local/AppRun/me.hysong.services.apprundropin.apprun
+ExecStart=/usr/bin/apprun.sh /usr/lib/AppRun/apprundropin.apprun --backend inotify-experimental
 
 [Install]
 WantedBy=graphical.target

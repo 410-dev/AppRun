@@ -12,6 +12,11 @@ class AppContext:
 
         # 컨텍스트 기본 설정
         self.unreadable_filename: bool = False  # 앱박스 내에 파일을 쓰기 할 때, 파일 명을 다이제스트 함
+        self.xmem: dict = {
+            "APPCONTEXT_FILEIO_RAMFS_CACHE_TARGETS": [],  # 파일 IO 딜레이를 최소화 하기 위해 특정 파일은 xmem 에 업로드 후 읽기시 리디렉션
+            "APPCONTEXT_FILEIO_RAMFS_CACHE": {}
+        }
+
 
         # 현재 인터프리터 위치에서 "pyvenv/bin/" 이 없다면 별도로 핸들링 시도
         if 'pyvenv/bin/' not in self._interpreter_path:
@@ -134,6 +139,15 @@ class AppContext:
         return file_path
 
     def read(self, filename: str) -> bytes:
+
+        # APPCONTEXT_FILEIO_RAMFS_CACHE_TARGETS 에 파일 명이 있으면 캐시에서 불러옴
+        file_should_be_copied_to_cache = False
+        if filename in self.xmem.get("APPCONTEXT_FILEIO_RAMFS_CACHE_TARGETS", []):
+            file_should_be_copied_to_cache = True
+            cache = self.xmem.get("APPCONTEXT_FILEIO_RAMFS_CACHE", {})
+            if filename in cache:
+                return cache[filename]
+
         # 파일을 읽기
         if self.unreadable_filename:
             # 파일명을 다이제스트 함
@@ -143,7 +157,39 @@ class AppContext:
         file_path = os.path.join(self._apprun_box_path, filename)
         with open(file_path, 'rb') as f:
             data = f.read()
+
+        # Check if data is string decodable
+        try:
+            if file_should_be_copied_to_cache:
+                decoded = data.decode('utf-8')  # 문자열로 디코딩 시도, 실패하면 예외 발생
+                self.xmem["APPCONTEXT_FILEIO_RAMFS_CACHE"][filename] = decoded
+        except UnicodeDecodeError:
+            pass  # Binary data, ignore
+
         return data
+
+    def decache(self, filename: str):
+        # APPCONTEXT_FILEIO_RAMFS_CACHE_TARGETS 에 파일 명이 있으면 캐시에서 제거
+        if filename in self.xmem.get("APPCONTEXT_FILEIO_RAMFS_CACHE_TARGETS", []):
+            cache = self.xmem.get("APPCONTEXT_FILEIO_RAMFS_CACHE", {})
+            if filename in cache:
+                del cache[filename]
+
+    def nocache(self, filename: str):
+        # APPCONTEXT_FILEIO_RAMFS_CACHE_TARGETS 에 파일 명이 있으면 캐시에서 제거 후 목록에서도 제거
+        if filename in self.xmem.get("APPCONTEXT_FILEIO_RAMFS_CACHE_TARGETS", []):
+            self.decache(filename)
+            self.xmem["APPCONTEXT_FILEIO_RAMFS_CACHE_TARGETS"].remove(filename)
+
+    def cache(self, filename: str, read_now: bool = False):
+        # APPCONTEXT_FILEIO_RAMFS_CACHE_TARGETS 에 파일 명이 있으면 캐시에 저장
+        if filename not in self.xmem.get("APPCONTEXT_FILEIO_RAMFS_CACHE_TARGETS", []):
+            self.xmem.setdefault("APPCONTEXT_FILEIO_RAMFS_CACHE_TARGETS", []).append(filename)
+
+        if read_now:
+            result = self.read_str_or_default(filename, None)  # 캐시에 저장하기 위해 읽기 시도
+            if result is not None:
+                self.xmem["APPCONTEXT_FILEIO_RAMFS_CACHE"][filename] = result
 
     def read_or_default(self, filename: str, default: bytes) -> bytes:
         # 파일을 읽기, 없으면 기본값 반환
@@ -324,6 +370,12 @@ class AppContext:
             input("Press Enter to exit...")
 
         sys.exit(code)
+
+    def set(self, key: str, value):
+        self.xmem[key] = value
+
+    def get(self, key: str, default = None):
+        return self.xmem.get(key, default)
 
     def __str__(self):
         return (

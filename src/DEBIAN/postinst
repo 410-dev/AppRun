@@ -2,12 +2,61 @@
 
 set -e
 
-ln -sf /usr/local/sbin/apprun.sh /usr/local/bin/apprun
-ln -sf /usr/local/sbin/apprunutil.sh /usr/local/bin/apprunutil
-ln -sf /usr/local/sbin/appid.sh /usr/local/bin/appid
-ln -sf /usr/local/sbin/apprun-prepare.sh /usr/local/bin/apprun-prepare
-ln -sf /usr/local/sbin/dictionary.py /usr/local/bin/dictionary
+curl -LsSf https://astral.sh/uv/install.sh | sh
 
-/usr/local/sbin/apprun-prepare.sh "/usr/local/AppRun/me.hysong.services.apprundropin.apprun"
-systemctl enable /usr/local/AppRun/me.hysong.services.apprundropin.apprun/me.hysong.services.apprundropin.service
-systemctl start me.hysong.services.apprundropin.service
+# Move $HOME/.local/bin/uv to /usr/local/bin/uv
+if [ -f "$HOME/.local/bin/uv" ]; then
+    mv "$HOME/.local/bin/uv" /usr/local/bin/uv
+else
+    echo "Error: uv was not found in $HOME/.local/bin/uv"
+    exit 1
+fi
+
+# Move $HOME/.local/bin/uvx to /usr/local/bin/uvx
+if [ -f "$HOME/.local/bin/uvx" ]; then
+    mv "$HOME/.local/bin/uvx" /usr/local/bin/uvx
+else
+    echo "Error: uvx was not found in $HOME/.local/bin/uvx"
+    exit 1
+fi
+
+
+# files
+orig_files_map_to=(
+    "appid"
+    "apprun"
+    "apprun3"
+    "apprun3-package"
+    "apprun-prepare"
+    "apprunutil"
+    "apprunx-thumbnailer"
+    "dictionary"
+)
+
+for file in "${orig_files_map_to[@]}"; do
+    if [ -f "/usr/bin/${file}.py" ]; then
+        chmod +x "/usr/bin/${file}.py"
+        ln -sf "/usr/bin/${file}.py" "/usr/bin/${file}"
+    elif [ -f "/usr/bin/${file}.sh" ]; then
+        chmod +x "/usr/bin/${file}.sh"
+        ln -sf "/usr/bin/${file}.sh" "/usr/bin/${file}"
+    else
+        echo "Error: ${file} was not found in /usr/bin/"
+        exit 1
+    fi
+done
+
+
+/usr/bin/apprun-prepare.sh "/usr/lib/AppRun/apprundropin.apprun"
+systemctl enable /usr/lib/AppRun/apprundropin.apprun/apprundropin.service
+systemctl start apprundropin.service
+
+
+# Update the MIME database and icon caches, and clear thumbnail cache
+sudo update-mime-database /usr/share/mime
+sudo update-icon-caches /usr/share/icons
+sudo update-desktop-database /usr/share/applications
+xdg-mime default apprun3.desktop application/x-apprunx
+rm -rf ~/.cache/thumbnails/
+
+echo "Please restart Nautilus using 'nautilus -q && nautilus &' to apply the changes."

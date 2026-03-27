@@ -1,0 +1,4 @@
+[Thumbnailer Entry]
+TryExec=/usr/bin/apprunx-thumbnailer
+Exec=/usr/bin/apprunx-thumbnailer %i %o %s
+MimeType=application/x-apprunx;

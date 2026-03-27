@@ -4,10 +4,27 @@ import json
 import tempfile
 import subprocess
 import argparse
+import sys
 from collections import defaultdict
+import libapplog as log
+
+from AppContext import AppContext
+
+ctx = AppContext()
+# ctx.write_str("LOGGER_CONFIG_ENABLE_DEBUG", "1")
+log.debug("Service started.")
 
 def simple_reg_loader(key: str, rtype: str, default):
-    path = "/var/noinstfs/aqua/root.d/registry/SYSTEM/AppRun/DropInServiceConfigs/" + key + "." + rtype + ".rv"
+    regpath = "SYSTEM/Frameworks/AppRun/DropInServiceConfigs/" + key + "." + rtype + ".rv"
+    path1 = "/tmp/registry/"
+    path2 = "/etc/aqua/registry/"
+    if os.path.isdir(path1):
+        path = os.path.join(path1, regpath)
+    elif os.path.isdir(path2):
+        path = os.path.join(path2, regpath)
+    else:
+        return default
+
     try:
         with open(path, "r", encoding="utf-8") as f:
             data = f.read()
@@ -25,11 +42,11 @@ def simple_reg_loader(key: str, rtype: str, default):
     except FileNotFoundError:
         pass
     except Exception as e:
-        print(f"Warning: could not read registry {path}: {e}")
+        log.info(f"Warning: could not read registry {path}: {e}")
     return default
 
 # Load service configurations
-# Path: /var/noinstfs/aqua/root.d/registry/SYSTEM/AppRun/DropInServiceConfigs/<key>.<type>.rv
+# Path: /tmp/registry/SYSTEM/AppRun/DropInServiceConfigs/<key>.<type>.rv
 MakeDirectoryIfPossible: bool = simple_reg_loader("MakeDirectoryIfPossible", "bool", True)
 BaseDirectory: str = simple_reg_loader("BaseDirectory", "str", "/home")
 ApplicationsDirectory: str = simple_reg_loader("ApplicationsDirectory", "str", "applications")
@@ -55,10 +72,10 @@ Template = """
 Version=$Version$
 Name=$Name$
 Comment=$Comment$
-Exec=/usr/local/sbin/apprun.sh "$BundlePath$" $Args$
+Exec=/usr/bin/apprun.sh "$BundlePath$" $Args$
 Icon=$Icon.png$
 Terminal=$Terminal$
-Type=$Type$
+Type=Application
 Categories=$Categories$;
 """
 
@@ -76,11 +93,13 @@ def load_registry() -> dict:
         with open(path, "r", encoding="utf-8") as f:
             data = json.load(f)
             if isinstance(data, dict):
+                log.debug(f"Loaded registry data: {json.dumps(data, indent=4)}")
                 return data
+            log.debug(f"Loaded registry data is not a dict: {data}. Starting with empty registry.")
     except FileNotFoundError:
-        pass
+        log.warning(f"Registry file not found at {path}. Starting with empty registry.")
     except Exception as e:
-        print(f"Warning: could not read registry {path}: {e}")
+        log.warning(f"Warning: could not read registry {path}: {e}")
     return {}
 
 
@@ -92,7 +111,10 @@ def save_registry(registry: dict) -> None:
     path = _registry_path()
     current_json = json.dumps(registry, indent=2, sort_keys=True)
 
+    log.debug(f"Current registry to save: {current_json}")
+
     if _last_saved_registry_cache == current_json:
+        log.debug("Registry unchanged since last save. Skipping write.")
         return
 
     tmp_fd, tmp_path = tempfile.mkstemp(prefix=".apprun-reg.", dir=os.path.dirname(path))
@@ -103,46 +125,55 @@ def save_registry(registry: dict) -> None:
             os.fsync(f.fileno())
         os.replace(tmp_path, path)
         _last_saved_registry_cache = current_json
+        log.debug("Registry saved successfully.")
     finally:
         if os.path.exists(tmp_path):
             try:
                 os.unlink(tmp_path)
-            except Exception:
-                pass
+                log.debug(f"Removed temporary registry file: {tmp_path}")
+            except Exception as e:
+                log.warning(f"Failed to remove temporary registry file {tmp_path}: {e}")
 
 
 def remove_file_safely(path: str) -> None:
     try:
         os.remove(path)
-        print(f"Removed stale desktop file: {path}")
+        log.info(f"Removed stale desktop file: {path}")
     except FileNotFoundError:
-        pass
+        log.warning(f"Warning: file {path} not found when attempting to remove.")
     except Exception as e:
-        print(f"Warning: could not remove {path}: {e}")
+        log.warning(f"Warning: could not remove {path}: {e}")
 
 
 def write_if_changed(path: str, content: str, mode: int = 0o644) -> None:
     try:
+        log.debug(f"Checking if {path} needs update...")
         with open(path, "r", encoding="utf-8") as f:
             if f.read() == content:
+                log.debug(f"No changes detected for {path}. Skipping write.")
                 return
-    except FileNotFoundError:
-        pass
+    except FileNotFoundError as fne:
+        log.warning(f"Warning: file {path} not found when checking for changes: {fne}")
+    except Exception as e:
+        log.warning(f"Warning: could not read {path} to check for changes: {e}")
 
     tmp_fd, tmp_path = tempfile.mkstemp(prefix=".apprun-desktop.", dir=os.path.dirname(path))
     try:
+        log.debug(f"Writing updated content to {path}...")
         with os.fdopen(tmp_fd, "w", encoding="utf-8") as f:
             f.write(content)
             f.flush()
             os.fsync(f.fileno())
         os.replace(tmp_path, path)
         os.chmod(path, mode)
+        log.debug(f"Updated desktop file written successfully: {path}")
     finally:
         if os.path.exists(tmp_path):
             try:
                 os.unlink(tmp_path)
-            except Exception:
-                pass
+                log.debug(f"Removed temporary desktop file: {tmp_path}")
+            except Exception as e:
+                log.warning(f"Failed to remove temporary desktop file {tmp_path}: {e}")
 
 
 # -------- Core AppRun Logic --------
@@ -151,21 +182,27 @@ def get_all_user_dirs(append_dir="") -> dict[str, str]:
     user_dirs = {}
     base_dir = CONFIG.get("BaseDirectory", "/home")
     if not os.path.exists(base_dir):
+        log.debug(f"Base directory {base_dir} does not exist. No user directories will be scanned.")
         return user_dirs
 
     for entry in os.scandir(base_dir):
+        log.debug(f"Scanning entry in base directory: {entry.name} (is_dir={entry.is_dir()})")
         if entry.is_dir():
+            log.debug(f"Found directory: {entry.name}. Checking for applications in {append_dir}...")
             user_dir = os.path.join(base_dir, entry.name, append_dir)
             if os.path.exists(user_dir):
                 user_dirs[entry.name] = user_dir
+                log.debug(f"User directory for {entry.name} found: {user_dir}")
             elif CONFIG.get("MakeDirectoryIfPossible", False):
+                log.debug(f"User directory for {entry.name} not found at {user_dir}. Attempting to create it...")
                 try:
                     os.makedirs(user_dir, exist_ok=True)
                     st = os.stat(os.path.join(base_dir, entry.name))
                     os.chown(user_dir, st.st_uid, st.st_gid)
                     user_dirs[entry.name] = user_dir
+                    log.debug(f"Created user directory for {entry.name}: {user_dir}")
                 except Exception as e:
-                    print(f"Could not create directory {user_dir}: {e}")
+                    log.warning(f"Could not create directory {user_dir}: {e}")
     return user_dirs
 
 
@@ -176,24 +213,31 @@ def generate_desktop_entry(property_dict: dict[str, str]) -> str:
 
     fallbacks = {
         "Version": "1.0", "Comment": "", "Args": "",
-        "Icon.png": "/usr/share/AppRun/unknown-app-icon.png",
+        "Icon.png": "/usr/share/apprun/default-icon.png",
         "Terminal": "false", "Type": "Application", "Categories": "Utility"
     }
     for frag, default_value in fallbacks.items():
         desktop_entry_content = desktop_entry_content.replace(f"${frag}$", default_value)
+
+    log.debug(f"Generated desktop entry content for {property_dict.get('Name', 'Unknown App')}:\n{json.dumps(property_dict, indent=4)}\nResulting .desktop content:\n{desktop_entry_content}")
+
     return desktop_entry_content
 
 
 def build_property_dict(apprun_path: str) -> dict[str, str] | None:
     result = subprocess.run(
-        ["/usr/local/sbin/apprunutil.sh", "BundleInfo", apprun_path],
+        ["/usr/bin/apprunutil.sh", "BundleInfo", apprun_path],
         capture_output=True, text=True
     )
+    log.debug(f"Building property dict for {apprun_path}")
     if result.returncode != 0:
+        log.debug(f"Failed to get BundleInfo for {apprun_path}: {result.stderr.strip()}")
         return None
 
     props: dict[str, str] = {"BundlePath": apprun_path}
     desktop_link_path = os.path.join(apprun_path, "AppRunMeta", "DesktopLink")
+
+    log.debug(f"Reading properties from {desktop_link_path} for {apprun_path}")
 
     if os.path.isdir(desktop_link_path):
         for prop_entry in os.scandir(desktop_link_path):
@@ -203,6 +247,7 @@ def build_property_dict(apprun_path: str) -> dict[str, str] | None:
                         props[prop_entry.name] = f.read().strip()
                 except UnicodeDecodeError:
                     props[prop_entry.name] = prop_entry.path
+    log.debug(f"Built property dict for {apprun_path}: {json.dumps(props, indent=4)}")
     return props
 
 
@@ -214,7 +259,7 @@ def ensure_user_applications_dir(username: str) -> str | None:
         os.chown(user_apps, st.st_uid, st.st_gid)
         return user_apps
     except Exception as e:
-        print(f"Could not ensure applications dir for {username}: {e}")
+        log.warning(f"Could not ensure applications dir for {username}: {e}")
         return None
 
 
@@ -236,6 +281,7 @@ def perform_sync_cycle(registry: dict) -> tuple[dict, list[str]]:
             for entry in os.scandir(target):
                 if entry.is_dir():
                     process_bundle(entry.path, "/usr/share/applications", None, observed_bundles, current_links)
+    log.debug(f"After global scan, observed bundles: {observed_bundles}, current links: {dict(current_links)}")
 
     # 2. Identify User Targets
     user_apprun_dirs = get_all_user_dirs(CONFIG.get("ApplicationsDirectory", "Applications"))
@@ -245,7 +291,11 @@ def perform_sync_cycle(registry: dict) -> tuple[dict, list[str]]:
             if entry.is_dir():
                 user_apps_dir = ensure_user_applications_dir(username)
                 if user_apps_dir:
+                    log.debug(f"Scanning {user_apps_dir} for {username}")
                     process_bundle(entry.path, user_apps_dir, username, observed_bundles, current_links)
+                else:
+                    log.debug(f"Skipping user {username} due to missing applications directory.")
+    log.debug(f"After user scan, observed bundles: {observed_bundles}, current links: {dict(current_links)}")
 
     # 3. Cleanup Stale Links (Bundle exists, but specific link is gone)
     for bundle, links_now in current_links.items():
@@ -254,6 +304,7 @@ def perform_sync_cycle(registry: dict) -> tuple[dict, list[str]]:
         for path in stale:
             remove_file_safely(path)
         registry[bundle] = {"desktop_files": sorted(links_now)}
+    log.debug(f"After cleanup of stale links, registry: {json.dumps(registry, indent=4)}")
 
     # 4. Cleanup Removed Bundles (Bundle completely gone)
     previously_known_bundles = set(registry.keys())
@@ -272,12 +323,15 @@ def process_bundle(apprun_path, dest_dir, username, observed_bundles, current_li
     props = build_property_dict(apprun_path)
     if props is None:
         return
-
+    log.debug(f"Processing bundle at {apprun_path} with properties: {json.dumps(props, indent=4)}")
     observed_bundles.add(apprun_path)
 
     if "Name" in props:
         content = generate_desktop_entry(props)
         desktop_file = os.path.join(dest_dir, f"{props.get('Name', 'App')}.desktop")
+
+        log.debug(f"Composed: {content}")
+        log.debug(f"Writing desktop file: {desktop_file}")
 
         write_if_changed(desktop_file, content, mode=0o644)
 
@@ -286,15 +340,17 @@ def process_bundle(apprun_path, dest_dir, username, observed_bundles, current_li
                 st = os.stat(os.path.join("/home", username))
                 os.chown(desktop_file, st.st_uid, st.st_gid)
             except Exception as e:
-                print(f"Warning: could not chown {desktop_file}: {e}")
+                log.error(f"Could not chown {desktop_file}: {e}")
 
         current_links[apprun_path].add(desktop_file)
+    else:
+        log.debug(f"Bundle at {apprun_path} does not have a 'Name' property. Skipping desktop file generation.")
 
 
 # -------- Execution Loops --------
 
 def run_polling_loop():
-    print("Starting Polling Backend...")
+    log.info("Starting Polling Backend...")
     registry = load_registry()
     while True:
         registry, _ = perform_sync_cycle(registry)
@@ -302,13 +358,13 @@ def run_polling_loop():
 
 
 def run_inotify_loop():
-    print("Starting Inotify Backend (Experimental)...")
+    log.info("Starting Inotify Backend (Experimental)...")
 
     try:
         import pyinotify
     except ImportError:
-        print("Error: 'pyinotify' module is required for the inotify backend.")
-        print("Please install it (e.g., 'pip install pyinotify' or 'apt install python3-pyinotify').")
+        log.error("Error: 'pyinotify' module is required for the inotify backend.")
+        log.error("Please install it (e.g., 'pip install pyinotify' or 'apt install python3-pyinotify').")
         sys.exit(1)
 
     registry = load_registry()
@@ -334,7 +390,7 @@ def run_inotify_loop():
             # For this simple blocking loop, we flag and sync.
             now = time.time()
             if now - self.last_sync > self.debounce_interval:
-                print(f"Event detected: {event.pathname}. Syncing...")
+                log.info(f"Event detected: {event.pathname}. Syncing...")
                 # Re-run full sync (which is safe because it's idempotent)
                 nonlocal registry
                 registry, current_watched = perform_sync_cycle(registry)
@@ -350,7 +406,7 @@ def run_inotify_loop():
 
     # Add initial watches
     for d in watched_dirs:
-        print(f"Watching: {d}")
+        log.info(f"Watching: {d}")
         wm.add_watch(d, mask, rec=False)
 
     # Also watch the base User directory to detect NEW users/application folders
@@ -374,8 +430,6 @@ if __name__ == "__main__":
     args = parser.parse_args()
 
     if args.backend == "inotify-experimental":
-        print("Starting Inotify Backend (Experimental)...")
         run_inotify_loop()
     else:
-        print("Starting Polling Backend...")
         run_polling_loop()

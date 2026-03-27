@@ -1,5 +1,10 @@
 #!/bin/bash
 
+function cat_with_stripped_trailing() {
+    val="$(cat "$1")"
+    echo "${val%$\'\n\'}"
+}
+
 if [[ "$1" == "Help" ]] || [[ "$1" == "--help" ]] || [[ "$1" == "-h" ]]; then
     echo "Usage: apprunutil.sh [Command] [Arguments]"
     echo ""
@@ -15,8 +20,8 @@ if [[ "$1" == "Help" ]] || [[ "$1" == "--help" ]] || [[ "$1" == "-h" ]]; then
     echo "  BundleInfo [AppRunPath]                   Show bundle information"
     echo ""
 elif [[ "$1" == "Prepare" ]]; then
-    # Call /usr/local/sbin/apprun-prepare.sh
-    /usr/local/sbin/apprun-prepare.sh "$2"
+    # Call /usr/bin/apprun-prepare.sh
+    /usr/bin/apprun-prepare.sh "$2"
     exit $?
 elif [[ "$1" == "HasProperty" ]]; then
     # Check if the bundle has a specific property in AppRunMeta/<property name> file
@@ -53,7 +58,7 @@ elif [[ "$1" == "ViewProperties" ]]; then
     if [[ -d "$APP_RUN_PATH/AppRunMeta" ]]; then
         for file in "$APP_RUN_PATH/AppRunMeta"/*; do
             PROPERTY_NAME=$(basename "$file")
-            PROPERTY_VALUE=$(cat "$file")
+            PROPERTY_VALUE=$(cat_with_stripped_trailing "$file")
             echo "$PROPERTY_NAME: $PROPERTY_VALUE"
         done
     fi
@@ -69,30 +74,35 @@ elif [[ "$1" == "BundleInfo" ]]; then
     APP_RUN_PATH="$2"
     if [[ -f "$APP_RUN_PATH/AppRunMeta/id" ]]; then
         echo "Format: 2"
-        echo "ID: $(cat "$APP_RUN_PATH/AppRunMeta/id")"
+        echo "ID: $(cat_with_stripped_trailing "$APP_RUN_PATH/AppRunMeta/id")"
     elif [[ -f "$APP_RUN_PATH/id" ]]; then
         echo "Format: 1"
-        echo "ID: $(cat "$APP_RUN_PATH/id")"
+        echo "ID: $(cat_with_stripped_trailing "$APP_RUN_PATH/id")"
     else
         echo "Unidentifiable format."
         exit 1
     fi
 
     if [[ -f "$APP_RUN_PATH/AppRunMeta/Version" ]]; then
-        echo "Version: $(cat "$APP_RUN_PATH/AppRunMeta/Version")"
+        echo "Version: $(cat_with_stripped_trailing "$APP_RUN_PATH/AppRunMeta/Version")"
     elif [[ -f "$APP_RUN_PATH/AppRunMeta/DesktopLink/Version" ]]; then
-        echo "Version: $(cat "$APP_RUN_PATH/AppRunMeta/DesktopLink/Version")"
+        echo "Version: $(cat_with_stripped_trailing "$APP_RUN_PATH/AppRunMeta/DesktopLink/Version")"
     fi
 
     if [[ -f "$APP_RUN_PATH/AppRunMeta/DesktopLink/Name" ]]; then
-        echo "Name: $(cat "$APP_RUN_PATH/AppRunMeta/DesktopLink/Name")"
+        echo "Name: $(cat_with_stripped_trailing "$APP_RUN_PATH/AppRunMeta/DesktopLink/Name")"
     elif [[ -f "$APP_RUN_PATH/AppRunMeta/Name" ]]; then
-        echo "Name: $(cat "$APP_RUN_PATH/AppRunMeta/Name")"
+        echo "Name: $(cat_with_stripped_trailing "$APP_RUN_PATH/AppRunMeta/Name")"
+    fi
+
+    if [[ -f "$APP_RUN_PATH/AppRunMeta/DesktopLink/Type" ]]; then
+        echo "Bundle Type: $(cat_with_stripped_trailing "$APP_RUN_PATH/AppRunMeta/DesktopLink/Type")"
+    elif [[ -f "$APP_RUN_PATH/AppRunMeta/Type" ]]; then
+        echo "Bundle Type: $(cat_with_stripped_trailing "$APP_RUN_PATH/AppRunMeta/Type")"
     fi
 
     if [[ -f "$APP_RUN_PATH/AppRunMeta/libs" ]]; then
-        echo "Library loads:"
-        cat "$APP_RUN_PATH/AppRunMeta/libs"
+        echo "Library loads: $(cat_with_stripped_trailing "$APP_RUN_PATH/AppRunMeta/libs")"
     fi
 
     # Determine Application Type
