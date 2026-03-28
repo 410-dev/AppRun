@@ -365,7 +365,7 @@ def _wrap_terminal(cmd: list[str], meta: dict) -> list[str]:
 
     # (터미널 실행파일, 구분자, 명령어를 문자열로 합쳐야 하는지 여부)
     terminals = [
-        ("ptyxis",         ["-x"],  True ),  # ptyxis -x "python3 main.py"
+        ("ptyxis",         ["--"],  False ),  # ptyxis -- "python3 main.py"
         ("alacritty",      ["-e"],  False),  # alacritty -e python3 main.py
         ("gnome-terminal", ["--"],  False),  # gnome-terminal -- python3 main.py
         ("konsole",        ["-e"],  False),
