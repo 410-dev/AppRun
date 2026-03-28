@@ -75,7 +75,7 @@ def handle_extract_file(apprunx: str, inner_path: str, dest: str) -> int:
 # Prepare 핸들러
 # ==============================================================================
 
-def handle_prepare(apprunx: str, register: bool) -> int:
+def handle_prepare(apprunx: str, mount_path: Path, register: bool) -> int:
     if not libapprun.is_squashfs(apprunx):
         print("Error: --prepare 는 Format 3 (.apprunx) 만 지원합니다.", file=sys.stderr)
         print("Format 1/2 는 apprun-prepare 를 사용하세요.", file=sys.stderr)
@@ -85,7 +85,6 @@ def handle_prepare(apprunx: str, register: bool) -> int:
     print(app_id)
     box    = libapprun.ensure_box(app_id)
 
-    mount_path = libapprun.get_mount_path(app_id)
     mount_path.mkdir(parents=True, exist_ok=True)
 
     if not libapprun.is_mounted(str(mount_path)):
@@ -389,44 +388,38 @@ def _wrap_terminal(cmd: list[str], meta: dict) -> list[str]:
     )
     sys.exit(1)
 
-# handle_run 초반, 마운트 확인 전에 추가
-def _heal_refcount(app_id: str) -> None:
-    """
-    비정상 종료로 refcount 가 틀어진 경우 복구.
-    마운트가 안 됐는데 refcount > 0 이면 리셋.
-    """
-    mount_path = libapprun.get_mount_path(app_id)
-    libapprun._ensure_refcount(app_id)
-    if not libapprun.is_mounted(str(mount_path)):
-        libapprun.get_refcount_path(app_id).write_text("0")
-
-def handle_run(apprunx: str, extra_args: list[str]) -> int:
+def _get_mountpath(apprunx: str) -> tuple[str, Path]:
     app_id     = libapprun.get_bundle_id(apprunx)
     mount_path = libapprun.get_mount_path(app_id)
+    return app_id, mount_path
+
+
+def handle_run(apprunx: str, extra_args: list[str]) -> int:
+    app_id, mount_path = _get_mountpath(apprunx)
 
     # 필수 패키지 확인 및 설치
     if not ensure_base_packages(apprunx):
         return 1  # 실행 중단
 
-    _heal_refcount(app_id)
-
     if libapprun.is_locked(app_id):
         libapprun.show_gui_alert("AppRun", f"{app_id} 준비 중입니다. 잠시 후 다시 시도해주세요.", "warning")
         return 1
 
-    if not libapprun.is_mounted(str(mount_path)):
+    if libapprun.is_mounted(str(mount_path)):
         try:
-            libapprun.mount(apprunx, str(mount_path))
-        except RuntimeError as e:
-            libapprun.show_gui_alert("AppRun 오류", f"마운트 실패: {e}", "error")
+            libapprun.unmount(str(mount_path))
+        except Exception as e:
+            libapprun.show_gui_alert("AppRun 오류", f"기존 이미지 언마운트 실패: {e}", "error")
             return 1
-
-    # 참조 카운트 증가
-    libapprun.increment_refcount(app_id)
+    try:
+        libapprun.mount(apprunx, str(mount_path))
+    except RuntimeError as e:
+        libapprun.show_gui_alert("AppRun 오류", f"마운트 실패: {e}", "error")
+        return 1
 
     bundle = str(mount_path)
 
-    prepare_code = handle_prepare(apprunx, register=False)
+    prepare_code = handle_prepare(apprunx, mount_path, register=False)
     if prepare_code != 0:
         return prepare_code
 
@@ -446,13 +439,10 @@ def handle_run(apprunx: str, extra_args: list[str]) -> int:
     try:
         result = subprocess.run(cmd + extra_args)
     finally:
-        # 프로세스 종료 시 항상 실행 (크래시, 강제종료 포함)
-        count = libapprun.decrement_refcount(app_id)
-        if count == 0:
-            try:
-                libapprun.unmount(str(mount_path))
-            except Exception:
-                pass  # 언마운트 실패해도 앱 종료에는 영향 없음
+        try:
+            libapprun.unmount(str(mount_path))
+        except Exception:
+            pass
 
     duration = time.time() - start
 
@@ -667,8 +657,8 @@ def main():
         if "is_format3"  in flags: sys.exit(handle_is_format3(apprunx))
         if "info"        in flags: sys.exit(handle_info(apprunx, flags["info"] or None))
         if "box_path"    in flags: sys.exit(handle_box_path(apprunx))
-        if "prepare"     in flags: sys.exit(handle_prepare(apprunx, register=False))
-        if "register"    in flags: sys.exit(handle_prepare(apprunx, register=True))
+        if "prepare"     in flags: sys.exit(handle_prepare(apprunx, _get_mountpath(apprunx)[1], register=False))
+        if "register"    in flags: sys.exit(handle_prepare(apprunx, _get_mountpath(apprunx)[1], register=True))
         if "extract_file_from" in flags:
             sys.exit(handle_extract_file(
                 apprunx,

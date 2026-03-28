@@ -17,9 +17,9 @@ class AppContext:
             "APPCONTEXT_FILEIO_RAMFS_CACHE_TARGETS": [],  # 파일 IO 딜레이를 최소화 하기 위해 특정 파일은 xmem 에 업로드 후 읽기시 리디렉션
             "APPCONTEXT_FILEIO_RAMFS_CACHE": {},
             "APPCONTEXT_ENABLE_COREFILE_PROTECTIONS": True,  # 아래 파일들을 읽기/쓰기 보호모드 켜기 끄기
-            "APPCONTEXT_WRITE_PROTECTED_FILENAMES": [".refcount", "pyvenv" + os.path.sep, "requirements.txt.sha256",
+            "APPCONTEXT_WRITE_PROTECTED_FILENAMES": ["pyvenv" + os.path.sep, "requirements.txt.sha256",
                                                      "requirements.txt.checksum"],
-            "APPCONTEXT_READ_PROTECTED_FILENAMES": [".refcount"]
+            "APPCONTEXT_READ_PROTECTED_FILENAMES": []
         }
 
         # 현재 인터프리터 위치에서 "pyvenv/bin/" 이 없다면 별도로 핸들링 시도

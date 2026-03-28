@@ -4,6 +4,7 @@ libapprun.py — AppRun Format 3 공용 라이브러리
 """
 
 import os
+import random
 import json
 import hashlib
 import subprocess
@@ -168,6 +169,8 @@ def mount(apprunx: str, mountpoint: str) -> None:
 
 def unmount(mountpoint: str) -> None:
     subprocess.run([FUSERMOUNT, "-u", mountpoint], check=True)
+    # Remove mount directory
+    Path(mountpoint).rmdir()
 
 
 def is_mounted(mountpoint: str) -> bool:
@@ -175,9 +178,11 @@ def is_mounted(mountpoint: str) -> bool:
     with open("/proc/mounts") as f:
         return any(mp in line for line in f)
 
+def _random_str() -> str:
+    return ''.join(random.choices('abcdefghijklmnopqrstuvwxyz0123456789', k=8))
 
 def get_mount_path(app_id: str) -> Path:
-    return MOUNT_ROOT / app_id
+    return MOUNT_ROOT / (app_id + '.' + _random_str())
 
 
 # ==============================================================================
@@ -227,7 +232,6 @@ def notify(title: str, message: str) -> None:
     if shutil.which("notify-send"):
         subprocess.run(["notify-send", title, message])
 
-
 def show_gui_alert(title: str, message: str, level: str = "info") -> None:
     print(f"[AppRun] {title}: {message}")
     zenity_flag  = {"info": "--info", "warning": "--warning", "error": "--error"}.get(level, "--info")
@@ -240,39 +244,6 @@ def show_gui_alert(title: str, message: str, level: str = "info") -> None:
 
 def run_cmd(args: list[str], check: bool = True) -> subprocess.CompletedProcess:
     return subprocess.run(args, capture_output=True, text=True, check=check)
-
-def get_refcount_path(app_id: str) -> Path:
-    return get_box_path(app_id) / ".refcount"
-
-def increment_refcount(app_id: str) -> int:
-    path = get_refcount_path(app_id)
-    _ensure_refcount(app_id)
-    count = int(path.read_text().strip()) if path.exists() else 0
-    count += 1
-    path.write_text(str(count))
-    return count
-
-def decrement_refcount(app_id: str) -> int:
-    path = get_refcount_path(app_id)
-    _ensure_refcount(app_id)
-    count = int(path.read_text().strip()) if path.exists() else 0
-    count = max(0, count - 1)
-    path.write_text(str(count))
-    return count
-
-def get_refcount(app_id: str) -> int:
-    path = get_refcount_path(app_id)
-    _ensure_refcount(app_id)
-    return int(path.read_text().strip()) if path.exists() else 0
-
-def _ensure_refcount(app_id: str) -> Path:
-    path = get_refcount_path(app_id)
-    # Ensure parent directories as well
-    if not path.exists():
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text("0")
-    return path
-
 
 
 def _parse_pkg_requirement(req: str) -> tuple[str, str | None, str | None]:
