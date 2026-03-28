@@ -3,6 +3,7 @@
 import os
 import hashlib
 
+
 class AppContext:
 
     def __init__(self):
@@ -12,11 +13,14 @@ class AppContext:
 
         # 컨텍스트 기본 설정
         self.unreadable_filename: bool = False  # 앱박스 내에 파일을 쓰기 할 때, 파일 명을 다이제스트 함
-        self.xmem: dict = {
+        self._xmem: dict = {
             "APPCONTEXT_FILEIO_RAMFS_CACHE_TARGETS": [],  # 파일 IO 딜레이를 최소화 하기 위해 특정 파일은 xmem 에 업로드 후 읽기시 리디렉션
-            "APPCONTEXT_FILEIO_RAMFS_CACHE": {}
+            "APPCONTEXT_FILEIO_RAMFS_CACHE": {},
+            "APPCONTEXT_ENABLE_COREFILE_PROTECTIONS": True,  # 아래 파일들을 읽기/쓰기 보호모드 켜기 끄기
+            "APPCONTEXT_WRITE_PROTECTED_FILENAMES": [".refcount", "pyvenv" + os.path.sep, "requirements.txt.sha256",
+                                                     "requirements.txt.checksum"],
+            "APPCONTEXT_READ_PROTECTED_FILENAMES": [".refcount"]
         }
-
 
         # 현재 인터프리터 위치에서 "pyvenv/bin/" 이 없다면 별도로 핸들링 시도
         if 'pyvenv/bin/' not in self._interpreter_path:
@@ -89,38 +93,177 @@ class AppContext:
         parent = os.path.dirname(os.path.abspath(entry_script_path))
         return parent + ('/' if not parent.endswith('/') else '')
 
+    def _walk_box(self, depth: int, include_directories: bool, include_pyvenv: bool):
+        """
+        AppRun Box 내부를 탐색하는 공통 제너레이터.
+        (절대경로, is_dir) 쌍을 yield합니다.
+        depth=-1 이면 무제한, 0 이면 최상위만 탐색합니다.
+        """
+
+        def helper(current_path: str, current_depth: int):
+            if depth != -1 and current_depth > depth:
+                return
+
+            try:
+                entries = os.listdir(current_path)
+            except PermissionError:
+                return
+
+            for entry in entries:
+                entry_path = os.path.join(current_path, entry)
+                is_dir = os.path.isdir(entry_path)
+
+                # pyvenv 필터: 최상위(depth=0) 순회 중 entry 이름으로 비교
+                if not include_pyvenv and current_depth == 0 and entry == "pyvenv":
+                    continue
+
+                if is_dir:
+                    if include_directories:
+                        yield entry_path, True
+                    yield from helper(entry_path, current_depth + 1)
+                else:
+                    yield entry_path, False
+
+        yield from helper(self._apprun_box_path, 0)
+
     # ---------- 공개 API ----------
 
-    def is_venv(self):
+    def is_venv(self) -> bool:
         return self._is_running_in_venv
 
-    def interpreter(self):
+    def interpreter(self) -> str:
         return self._interpreter_path
 
-    def box(self):
+    def box(self) -> str:
         return self._apprun_box_path
 
-    def id(self):
+    def id(self) -> str:
         return self._bundle_id
-    
-    def pid(self):
+
+    def pid(self) -> int:
         return self._pid
 
-    def bundle(self):
+    def bundle(self) -> str:
         """
         번들 경로를 반환.
         번들 경로는 '첫 엔트리 스크립트'의 부모 디렉터리로 정의됨.
         """
         return self._bundle_path
 
-    def entry_script(self):
+    def entry_script(self) -> str:
         """
         탐지된 첫 엔트리 스크립트의 절대 경로를 반환.
         디버그/로깅 용도.
         """
         return self._entry_script_path
 
-    def write(self, filename: str, data: bytes):
+    def file_in_box(self, subpath: str) -> str:
+        return os.path.join(self.box(), subpath)
+
+    def has_file_in_box(self, filename: str) -> bool:
+        # AppRun Box 내에 파일이 존재하는지 여부 반환
+        if self.unreadable_filename:
+            digest = hashlib.sha256(filename.encode()).hexdigest()
+            filename = digest
+
+        file_path = os.path.join(self._apprun_box_path, filename)
+        return os.path.isfile(file_path)
+
+    def list_file_in_box_structured(
+            self,
+            recursive: bool = False,
+            include_directories: bool = True,
+            depth: int = -1,
+            include_pyvenv: bool = False
+    ) -> dict[str, dict | str]:
+        """
+        AppRun Box 내의 파일 목록을 중첩 딕셔너리 구조로 반환합니다.
+        - recursive: True 면 하위 디렉터리까지 탐색
+        - include_directories: True 면 결과에 디렉터리도 포함
+        - depth: 탐색 깊이 제한 (-1 이면 무제한, 0 이면 최상위만)
+        """
+        # recursive=False 이면 최상위(depth=0)만 탐색
+        effective_depth = 0 if not recursive else depth
+
+        result = {}
+
+        def helper(current_path: str, current_dict: dict, current_depth: int):
+            if effective_depth != -1 and current_depth > effective_depth:
+                return
+
+            try:
+                entries = os.listdir(current_path)
+            except PermissionError:
+                return
+
+            for entry in entries:
+                entry_path = os.path.join(current_path, entry)
+
+                # pyvenv 필터: 최상위(depth=0) 순회 중 entry 이름으로 비교
+                if not include_pyvenv and current_depth == 0 and entry == "pyvenv":
+                    continue
+
+                if os.path.isdir(entry_path):
+                    # 하위 항목을 먼저 재귀 탐색
+                    sub_dict = {}
+                    helper(entry_path, sub_dict, current_depth + 1)
+
+                    # include_directories=True 이거나,
+                    # False 라도 하위에 파일이 있으면 구조 유지를 위해 포함
+                    if include_directories or sub_dict:
+                        current_dict[entry] = sub_dict
+                else:
+                    current_dict[entry] = "file"
+
+        helper(self._apprun_box_path, result, 0)
+        return result
+
+    def list_file_in_box_flat(
+            self,
+            recursive: bool = False,
+            include_directories: bool = True,
+            depth: int = -1,
+            include_pyvenv: bool = False
+    ) -> list[str]:
+        """
+        AppRun Box 내의 파일 목록을 상대경로 문자열 리스트로 반환합니다.
+        - recursive: True 면 하위 디렉터리까지 탐색
+        - include_directories: True 면 결과에 디렉터리도 포함
+        - depth: 탐색 깊이 제한 (-1 이면 무제한, 0 이면 최상위만)
+        """
+        effective_depth = 0 if not recursive else depth
+
+        return [
+            os.path.relpath(path, self._apprun_box_path)
+            for path, is_dir in self._walk_box(effective_depth, include_directories, include_pyvenv)
+            if not is_dir or include_directories
+        ]
+
+    def _io_accessible(self, filename: str, mode: str) -> bool:
+        # APPCONTEXT_ENABLE_COREFILE_PROTECTIONS 이 False 면, 무조건 읽기 쓰기 가능
+        if not self._xmem.get("APPCONTEXT_ENABLE_COREFILE_PROTECTIONS", True):
+            return True
+
+        protected_filenames = []
+        if mode == 'read':
+            protected_filenames = self._xmem.get("APPCONTEXT_READ_PROTECTED_FILENAMES", [])
+        elif mode == 'write':
+            protected_filenames = self._xmem.get("APPCONTEXT_WRITE_PROTECTED_FILENAMES", [])
+
+        for protected_filename in protected_filenames:
+            if protected_filename.endswith(os.path.sep):  # 디렉터리를 필터링 함
+                if filename.startswith(protected_filename):
+                    return False
+            else:  # 파일명을 필터링 함
+                if filename == protected_filename:
+                    return False
+        return True
+
+    def write(self, filename: str, data: bytes) -> str:
+
+        if not self._io_accessible(filename, 'write'):
+            raise PermissionError(f"Writing to '{filename}' is protected by AppContext settings.")
+
         # 파일을 쓰기
         # unreadable_filename 이 True 면, 파일명을 다이제스트 함
         if self.unreadable_filename:
@@ -140,11 +283,14 @@ class AppContext:
 
     def read(self, filename: str) -> bytes:
 
+        if not self._io_accessible(filename, 'read'):
+            raise PermissionError(f"Reading from '{filename}' is protected by AppContext settings.")
+
         # APPCONTEXT_FILEIO_RAMFS_CACHE_TARGETS 에 파일 명이 있으면 캐시에서 불러옴
         file_should_be_copied_to_cache = False
-        if filename in self.xmem.get("APPCONTEXT_FILEIO_RAMFS_CACHE_TARGETS", []):
+        if filename in self._xmem.get("APPCONTEXT_FILEIO_RAMFS_CACHE_TARGETS", []):
             file_should_be_copied_to_cache = True
-            cache = self.xmem.get("APPCONTEXT_FILEIO_RAMFS_CACHE", {})
+            cache = self._xmem.get("APPCONTEXT_FILEIO_RAMFS_CACHE", {})
             if filename in cache:
                 return cache[filename]
 
@@ -162,7 +308,7 @@ class AppContext:
         try:
             if file_should_be_copied_to_cache:
                 decoded = data.decode('utf-8')  # 문자열로 디코딩 시도, 실패하면 예외 발생
-                self.xmem["APPCONTEXT_FILEIO_RAMFS_CACHE"][filename] = decoded
+                self._xmem["APPCONTEXT_FILEIO_RAMFS_CACHE"][filename] = decoded
         except UnicodeDecodeError:
             pass  # Binary data, ignore
 
@@ -170,26 +316,26 @@ class AppContext:
 
     def decache(self, filename: str):
         # APPCONTEXT_FILEIO_RAMFS_CACHE_TARGETS 에 파일 명이 있으면 캐시에서 제거
-        if filename in self.xmem.get("APPCONTEXT_FILEIO_RAMFS_CACHE_TARGETS", []):
-            cache = self.xmem.get("APPCONTEXT_FILEIO_RAMFS_CACHE", {})
+        if filename in self._xmem.get("APPCONTEXT_FILEIO_RAMFS_CACHE_TARGETS", []):
+            cache = self._xmem.get("APPCONTEXT_FILEIO_RAMFS_CACHE", {})
             if filename in cache:
                 del cache[filename]
 
     def nocache(self, filename: str):
         # APPCONTEXT_FILEIO_RAMFS_CACHE_TARGETS 에 파일 명이 있으면 캐시에서 제거 후 목록에서도 제거
-        if filename in self.xmem.get("APPCONTEXT_FILEIO_RAMFS_CACHE_TARGETS", []):
+        if filename in self._xmem.get("APPCONTEXT_FILEIO_RAMFS_CACHE_TARGETS", []):
             self.decache(filename)
-            self.xmem["APPCONTEXT_FILEIO_RAMFS_CACHE_TARGETS"].remove(filename)
+            self._xmem["APPCONTEXT_FILEIO_RAMFS_CACHE_TARGETS"].remove(filename)
 
     def cache(self, filename: str, read_now: bool = False):
         # APPCONTEXT_FILEIO_RAMFS_CACHE_TARGETS 에 파일 명이 있으면 캐시에 저장
-        if filename not in self.xmem.get("APPCONTEXT_FILEIO_RAMFS_CACHE_TARGETS", []):
-            self.xmem.setdefault("APPCONTEXT_FILEIO_RAMFS_CACHE_TARGETS", []).append(filename)
+        if filename not in self._xmem.get("APPCONTEXT_FILEIO_RAMFS_CACHE_TARGETS", []):
+            self._xmem.setdefault("APPCONTEXT_FILEIO_RAMFS_CACHE_TARGETS", []).append(filename)
 
         if read_now:
             result = self.read_str_or_default(filename, None)  # 캐시에 저장하기 위해 읽기 시도
             if result is not None:
-                self.xmem["APPCONTEXT_FILEIO_RAMFS_CACHE"][filename] = result
+                self._xmem["APPCONTEXT_FILEIO_RAMFS_CACHE"][filename] = result
 
     def read_or_default(self, filename: str, default: bytes) -> bytes:
         # 파일을 읽기, 없으면 기본값 반환
@@ -213,20 +359,20 @@ class AppContext:
             return self.read_str(filename, encoding)
         except FileNotFoundError:
             return default
-        
+
     def username(self) -> str:
         # 현재 사용자 이름 반환
         import getpass
         return getpass.getuser()
-    
+
     def euid(self) -> int:
         # 현재 프로세스의 EUID 반환
         return os.geteuid()
-    
+
     def uid(self) -> int:
         # 현재 프로세스의 UID 반환
         return os.getuid()
-    
+
     def userhome(self) -> str:
         # 현재 사용자의 홈 디렉터리 반환
         import os
@@ -371,11 +517,11 @@ class AppContext:
 
         sys.exit(code)
 
-    def set(self, key: str, value):
-        self.xmem[key] = value
+    def xmem_set(self, key: str, value):
+        self._xmem[key] = value
 
-    def get(self, key: str, default = None):
-        return self.xmem.get(key, default)
+    def xmem_get(self, key: str, default=None):
+        return self._xmem.get(key, default)
 
     def __str__(self):
         return (
@@ -387,4 +533,4 @@ class AppContext:
             f"bundle_id={self._bundle_id}"
             ")"
         )
-    
+
