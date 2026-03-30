@@ -133,8 +133,10 @@ my_awesome_app
     "description":        "앱에 대한 간단한 설명",
     "type":               "Application",
     "author":             "홍길동",
+    "apt-requirements":   ["fastfetch", "openjdk-25-jre", "python3>=3.10"],
 
     "entry_point":        "python {APPDIR}/src/main.py",
+  
 
     "enforce_root_launch": false,
     "keep_environment":    false,
@@ -147,13 +149,14 @@ my_awesome_app
 
 #### 앱 정보
 
-| 키 | 필수 여부 | 타입 | 설명 |
-|----|----------|------|------|
-| `name` | 🟡 권장 | string | 사람이 읽을 수 있는 앱 이름. 런처에 표시됨 |
-| `version` | 🟡 권장 | string | 앱 버전. 형식 자유 (`1.0.0`, `2024.01` 등) |
-| `description` | 🔵 옵셔널 | string | 앱 설명. 런처 툴팁에 표시됨 |
-| `type` | 🟡 권장 | string | `Application` 또는 `Utility`. 크래시 감지 여부 결정 |
-| `author` | 🔵 옵셔널 | string | 제작자 이름 |
+| 키 | 필수 여부 | 타입 | 설명                                             |
+|----|----------|------|------------------------------------------------|
+| `name` | 🟡 권장 | string | 사람이 읽을 수 있는 앱 이름. 런처에 표시됨                      |
+| `version` | 🟡 권장 | string | 앱 버전. 형식 자유 (`1.0.0`, `2024.01` 등)             |
+| `description` | 🔵 옵셔널 | string | 앱 설명. 런처 툴팁에 표시됨                               |
+| `type` | 🟡 권장 | string | `Application` 또는 `Utility`. 크래시 감지 여부 결정       |
+| `author` | 🔵 옵셔널 | string | 제작자 이름                                         |
+| `apt-requirements` | 🔵 옵셔널 | string[] | 시스템 패키지 의존성. 누락 패키지 감지시 `apt install` 실행 여부 물음 |
 
 `type` 이 `Application` 이면 앱이 비정상 종료되거나 1초 안에 종료될 경우 크래시 알림이 표시됩니다. `Utility` 는 크래시 감지를 하지 않습니다.
 

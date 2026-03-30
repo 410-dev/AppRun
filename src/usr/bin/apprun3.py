@@ -9,6 +9,7 @@ import os
 import subprocess
 import time
 import shutil
+import tempfile
 from pathlib import Path
 
 sys.path.insert(0, "/usr/lib/python3/dist-packages")
@@ -74,7 +75,7 @@ def handle_extract_file(apprunx: str, inner_path: str, dest: str) -> int:
 # Prepare 핸들러
 # ==============================================================================
 
-def handle_prepare(apprunx: str, register: bool) -> int:
+def handle_prepare(apprunx: str, mount_path: Path, register: bool) -> int:
     if not libapprun.is_squashfs(apprunx):
         print("Error: --prepare 는 Format 3 (.apprunx) 만 지원합니다.", file=sys.stderr)
         print("Format 1/2 는 apprun-prepare 를 사용하세요.", file=sys.stderr)
@@ -84,7 +85,6 @@ def handle_prepare(apprunx: str, register: bool) -> int:
     print(app_id)
     box    = libapprun.ensure_box(app_id)
 
-    mount_path = libapprun.get_mount_path(app_id)
     mount_path.mkdir(parents=True, exist_ok=True)
 
     if not libapprun.is_mounted(str(mount_path)):
@@ -166,6 +166,194 @@ def _prepare_python(bundle: str, app_id: str, box: Path) -> int:
     libapprun.notify("[AppRun] 준비 완료", f"{app_id} 준비 완료")
     return 0
 
+def _has_gui() -> bool:
+    """DISPLAY 또는 WAYLAND_DISPLAY 가 설정돼 있으면 GUI 환경으로 판단."""
+    return bool(os.environ.get("DISPLAY") or os.environ.get("WAYLAND_DISPLAY"))
+
+
+def _find_terminal() -> list[str] | None:
+    """
+    시스템에서 사용 가능한 터미널 에뮬레이터를 찾아 반환.
+    반환 형식: [실행파일, <새 명령 실행 플래그>] — 뒤에 명령을 이어 붙일 수 있는 형태.
+    """
+    candidates = [
+        # (실행파일,  명령 실행 플래그)
+        ("ptyxis",              "--"),  # ptyxis -x "python3 main.py"
+        ("alacritty",           "-e"),  # alacritty -e python3 main.py
+        ("x-terminal-emulator", "-e"),
+        ("gnome-terminal",      "--"),
+        ("xfce4-terminal",      "-e"),
+        ("konsole",             "-e"),
+        ("xterm",               "-e"),
+        ("lxterminal",          "-e"),
+        ("mate-terminal",       "-e"),
+    ]
+    for binary, flag in candidates:
+        if shutil.which(binary):
+            return [binary, flag]
+    return None
+
+
+def _pkexec_available() -> bool:
+    return bool(shutil.which("pkexec"))
+
+
+def _pkg_names_only(requirements: list[str]) -> list[str]:
+    """
+    "python3-venv>=3.11" → "python3-venv"
+    apt install 에 넘길 패키지 이름만 추출.
+    """
+    return [libapprun._parse_pkg_requirement(r)[0] for r in requirements]
+
+
+def _install_packages_gui(pkg_names: list[str]) -> bool:
+    if not _pkexec_available():
+        libapprun.show_gui_alert(
+            "AppRun — 패키지 설치 오류",
+            "pkexec 를 찾을 수 없습니다. polkit 이 설치되어 있는지 확인하세요.",
+            level="error"
+        )
+        return False
+
+    apt_cmd = ["pkexec", "apt", "install", "-y"] + pkg_names
+
+    terminal = _find_terminal()
+
+    if terminal:
+        # exit code 를 임시 파일에 기록
+        with tempfile.NamedTemporaryFile(
+            mode='w', suffix='.exitcode', delete=False
+        ) as f:
+            exitcode_file = f.name
+
+        try:
+            shell_cmd = (
+                " ".join(apt_cmd) + "; "
+                "success=$?; "
+                f"echo $success > {exitcode_file}; "
+                "if [ $success -eq 0 ]; then "
+                "  echo ''; echo '--- 설치 완료. 5초 후 창이 닫힙니다 ---'; sleep 5; "
+                "else "
+                "  echo ''; echo '--- 설치 실패. 창을 닫으려면 아무 키나 누르세요 ---'; read -n 1; "
+                "fi"
+            )
+
+            proc = subprocess.run(terminal + ["bash", "-c", shell_cmd])
+
+            # 임시 파일에서 실제 exit code 읽기
+            try:
+                actual_code = int(Path(exitcode_file).read_text().strip())
+            except (ValueError, FileNotFoundError):
+                # 파일이 없다 = 터미널 자체가 비정상 종료 (pkexec 취소 등)
+                actual_code = proc.returncode if proc.returncode != 0 else 1
+
+            return actual_code == 0
+
+        finally:
+            Path(exitcode_file).unlink(missing_ok=True)
+
+    else:
+        libapprun.notify("[AppRun] 의존성 설치중", f"[AppRun] 터미널 에뮬레이터를 찾을 수 없습니다. pkexec 로 직접 실행: {' '.join(apt_cmd)}")
+        proc = subprocess.run(apt_cmd)
+        return proc.returncode == 0
+
+def _install_packages_cli(pkg_names: list[str], auto: bool = False) -> bool:
+    """
+    CLI 환경에서 패키지 설치.
+    auto=True 이면 묻지 않고 즉시 설치 (sudo 필요).
+    auto=False 이면 사용자에게 확인 후 설치.
+    """
+    if not auto:
+        print(f"\n[AppRun] 다음 패키지가 필요합니다: {', '.join(pkg_names)}")
+        try:
+            answer = input("지금 설치하시겠습니까? [y/N] ").strip().lower()
+        except EOFError:
+            answer = "n"
+        if answer not in ("y", "yes"):
+            return False
+
+    apt_cmd = ["sudo", "apt-get", "install", "-y"] + pkg_names
+    print(f"[AppRun] 실행: {' '.join(apt_cmd)}")
+    proc = subprocess.run(apt_cmd)
+    return proc.returncode == 0
+
+
+def ensure_base_packages(path: str) -> bool:
+    """
+    missing 패키지 확인 → 환경에 따라 설치 시도.
+
+    반환값:
+      True  → 모든 패키지가 충족됨 (또는 설치 성공)
+      False → 사용자가 설치를 거부했거나 설치 실패 → 실행 중단 필요
+    """
+    missing = libapprun.list_missing_base_packages(path)
+    if not missing:
+        return True
+
+    pkg_names = _pkg_names_only(missing)
+
+    if _has_gui():
+        # GUI: 설치 여부를 다이얼로그로 확인
+        confirmed = _confirm_install_gui(missing)
+        if not confirmed:
+            libapprun.show_gui_alert(
+                "AppRun — 실행 취소",
+                "필수 패키지가 설치되지 않아 실행을 중단합니다.",
+                level="warning"
+            )
+            return False
+        try:
+            success = _install_packages_gui(pkg_names)
+        except Exception as e:
+            print(f"Error during package installation: {e}", file=sys.stderr)
+            success = False
+
+        if not success:
+            libapprun.show_gui_alert(
+                "AppRun — 설치 실패",
+                "패키지 설치에 실패했습니다. 로그를 확인하세요.",
+                level="error"
+            )
+        return success
+    else:
+        # CLI: AUTO_INSTALL_BASEPKG=1 이면 자동 설치
+        auto = os.environ.get("AUTO_INSTALL_BASEPKG", "0") == "1"
+        if auto:
+            print(f"[AppRun] AUTO_INSTALL_BASEPKG=1 — 자동 설치: {', '.join(pkg_names)}")
+        success = _install_packages_cli(pkg_names, auto=auto)
+        if not success:
+            print("[AppRun] 패키지 설치가 취소되었거나 실패했습니다. 실행을 중단합니다.")
+        return success
+
+
+def _confirm_install_gui(missing: list[str]) -> bool:
+    """
+    zenity / kdialog 로 설치 확인 다이얼로그 표시.
+    둘 다 없으면 True (설치 진행) 로 fallback.
+    """
+    pkg_list = "\n".join(f"  • {p}" for p in missing)
+    message = f"이 앱을 실행하려면 다음 패키지가 필요합니다:\n\n{pkg_list}\n\n지금 설치하시겠습니까?"
+
+    if shutil.which("zenity"):
+        result = subprocess.run([
+            "zenity", "--question",
+            f"--text={message}",
+            "--title=AppRun — 필수 패키지 설치",
+            "--width=420",
+            "--ok-label=설치",
+            "--cancel-label=취소",
+        ])
+        return result.returncode == 0
+
+    if shutil.which("kdialog"):
+        result = subprocess.run([
+            "kdialog", "--yesno", message,
+            "--title", "AppRun — 필수 패키지 설치",
+        ])
+        return result.returncode == 0
+
+    # GUI 다이얼로그 도구 없음 → 그냥 진행
+    return True
 
 # ==============================================================================
 # 실행 핸들러
@@ -177,7 +365,7 @@ def _wrap_terminal(cmd: list[str], meta: dict) -> list[str]:
 
     # (터미널 실행파일, 구분자, 명령어를 문자열로 합쳐야 하는지 여부)
     terminals = [
-        ("ptyxis",         ["-x"],  True ),  # ptyxis -x "python3 main.py"
+        ("ptyxis",         ["--"],  False ),  # ptyxis -- "python3 main.py"
         ("alacritty",      ["-e"],  False),  # alacritty -e python3 main.py
         ("gnome-terminal", ["--"],  False),  # gnome-terminal -- python3 main.py
         ("konsole",        ["-e"],  False),
@@ -200,40 +388,38 @@ def _wrap_terminal(cmd: list[str], meta: dict) -> list[str]:
     )
     sys.exit(1)
 
-# handle_run 초반, 마운트 확인 전에 추가
-def _heal_refcount(app_id: str) -> None:
-    """
-    비정상 종료로 refcount 가 틀어진 경우 복구.
-    마운트가 안 됐는데 refcount > 0 이면 리셋.
-    """
-    mount_path = libapprun.get_mount_path(app_id)
-    libapprun._ensure_refcount(app_id)
-    if not libapprun.is_mounted(str(mount_path)):
-        libapprun.get_refcount_path(app_id).write_text("0")
-
-def handle_run(apprunx: str, extra_args: list[str]) -> int:
+def _get_mountpath(apprunx: str) -> tuple[str, Path]:
     app_id     = libapprun.get_bundle_id(apprunx)
     mount_path = libapprun.get_mount_path(app_id)
+    return app_id, mount_path
 
-    _heal_refcount(app_id)
+
+def handle_run(apprunx: str, extra_args: list[str]) -> int:
+    app_id, mount_path = _get_mountpath(apprunx)
+
+    # 필수 패키지 확인 및 설치
+    if not ensure_base_packages(apprunx):
+        return 1  # 실행 중단
 
     if libapprun.is_locked(app_id):
         libapprun.show_gui_alert("AppRun", f"{app_id} 준비 중입니다. 잠시 후 다시 시도해주세요.", "warning")
         return 1
 
-    if not libapprun.is_mounted(str(mount_path)):
+    if libapprun.is_mounted(str(mount_path)):
         try:
-            libapprun.mount(apprunx, str(mount_path))
-        except RuntimeError as e:
-            libapprun.show_gui_alert("AppRun 오류", f"마운트 실패: {e}", "error")
+            libapprun.unmount(str(mount_path))
+        except Exception as e:
+            libapprun.show_gui_alert("AppRun 오류", f"기존 이미지 언마운트 실패: {e}", "error")
             return 1
-
-    # 참조 카운트 증가
-    libapprun.increment_refcount(app_id)
+    try:
+        libapprun.mount(apprunx, str(mount_path))
+    except RuntimeError as e:
+        libapprun.show_gui_alert("AppRun 오류", f"마운트 실패: {e}", "error")
+        return 1
 
     bundle = str(mount_path)
 
-    prepare_code = handle_prepare(apprunx, register=False)
+    prepare_code = handle_prepare(apprunx, mount_path, register=False)
     if prepare_code != 0:
         return prepare_code
 
@@ -253,13 +439,10 @@ def handle_run(apprunx: str, extra_args: list[str]) -> int:
     try:
         result = subprocess.run(cmd + extra_args)
     finally:
-        # 프로세스 종료 시 항상 실행 (크래시, 강제종료 포함)
-        count = libapprun.decrement_refcount(app_id)
-        if count == 0:
-            try:
-                libapprun.unmount(str(mount_path))
-            except Exception:
-                pass  # 언마운트 실패해도 앱 종료에는 영향 없음
+        try:
+            libapprun.unmount(str(mount_path))
+        except Exception:
+            pass
 
     duration = time.time() - start
 
@@ -474,8 +657,8 @@ def main():
         if "is_format3"  in flags: sys.exit(handle_is_format3(apprunx))
         if "info"        in flags: sys.exit(handle_info(apprunx, flags["info"] or None))
         if "box_path"    in flags: sys.exit(handle_box_path(apprunx))
-        if "prepare"     in flags: sys.exit(handle_prepare(apprunx, register=False))
-        if "register"    in flags: sys.exit(handle_prepare(apprunx, register=True))
+        if "prepare"     in flags: sys.exit(handle_prepare(apprunx, _get_mountpath(apprunx)[1], register=False))
+        if "register"    in flags: sys.exit(handle_prepare(apprunx, _get_mountpath(apprunx)[1], register=True))
         if "extract_file_from" in flags:
             sys.exit(handle_extract_file(
                 apprunx,

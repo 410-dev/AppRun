@@ -53,6 +53,7 @@ systemctl start apprundropin.service
 
 
 # Update the MIME database and icon caches, and clear thumbnail cache
+set +e
 sudo update-mime-database /usr/share/mime
 sudo update-icon-caches /usr/share/icons
 sudo update-desktop-database /usr/share/applications

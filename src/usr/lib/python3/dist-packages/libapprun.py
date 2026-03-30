@@ -4,10 +4,13 @@ libapprun.py — AppRun Format 3 공용 라이브러리
 """
 
 import os
+import random
 import json
 import hashlib
 import subprocess
 import shutil
+import re
+from packaging.version import Version, InvalidVersion
 from pathlib import Path
 from enum import IntEnum
 
@@ -166,6 +169,8 @@ def mount(apprunx: str, mountpoint: str) -> None:
 
 def unmount(mountpoint: str) -> None:
     subprocess.run([FUSERMOUNT, "-u", mountpoint], check=True)
+    # Remove mount directory
+    Path(mountpoint).rmdir()
 
 
 def is_mounted(mountpoint: str) -> bool:
@@ -173,9 +178,11 @@ def is_mounted(mountpoint: str) -> bool:
     with open("/proc/mounts") as f:
         return any(mp in line for line in f)
 
+def _random_str() -> str:
+    return ''.join(random.choices('abcdefghijklmnopqrstuvwxyz0123456789', k=8))
 
 def get_mount_path(app_id: str) -> Path:
-    return MOUNT_ROOT / app_id
+    return MOUNT_ROOT / (app_id + '.' + _random_str())
 
 
 # ==============================================================================
@@ -225,7 +232,6 @@ def notify(title: str, message: str) -> None:
     if shutil.which("notify-send"):
         subprocess.run(["notify-send", title, message])
 
-
 def show_gui_alert(title: str, message: str, level: str = "info") -> None:
     print(f"[AppRun] {title}: {message}")
     zenity_flag  = {"info": "--info", "warning": "--warning", "error": "--error"}.get(level, "--info")
@@ -239,34 +245,88 @@ def show_gui_alert(title: str, message: str, level: str = "info") -> None:
 def run_cmd(args: list[str], check: bool = True) -> subprocess.CompletedProcess:
     return subprocess.run(args, capture_output=True, text=True, check=check)
 
-def get_refcount_path(app_id: str) -> Path:
-    return get_box_path(app_id) / ".refcount"
 
-def increment_refcount(app_id: str) -> int:
-    path = get_refcount_path(app_id)
-    _ensure_refcount(app_id)
-    count = int(path.read_text().strip()) if path.exists() else 0
-    count += 1
-    path.write_text(str(count))
-    return count
+def _parse_pkg_requirement(req: str) -> tuple[str, str | None, str | None]:
+    """
+    "python3-venv>=3.11"  → ("python3-venv", ">=", "3.11")
+    "openjdk-25-jdk"      → ("openjdk-25-jdk", None, None)
+    지원 연산자: >=, <=, ==, >,
+    """
+    m = re.match(r'^([A-Za-z0-9+\-\.]+?)\s*(>=|<=|==|>|<)\s*(.+)$', req)
+    if m:
+        return m.group(1), m.group(2), m.group(3)
+    return req.strip(), None, None
 
-def decrement_refcount(app_id: str) -> int:
-    path = get_refcount_path(app_id)
-    _ensure_refcount(app_id)
-    count = int(path.read_text().strip()) if path.exists() else 0
-    count = max(0, count - 1)
-    path.write_text(str(count))
-    return count
 
-def get_refcount(app_id: str) -> int:
-    path = get_refcount_path(app_id)
-    _ensure_refcount(app_id)
-    return int(path.read_text().strip()) if path.exists() else 0
+def _get_installed_version(pkg_name: str) -> str | None:
+    """
+    dpkg-query 로 설치된 패키지 버전 조회.
+    설치되지 않았거나 오류 시 None 반환.
+    """
+    result = subprocess.run(
+        ["dpkg-query", "-W", "-f=${Status} ${Version}", pkg_name],
+        capture_output=True, text=True
+    )
+    if result.returncode != 0:
+        return None
+    # "install ok installed 3.11.2" 형태
+    line = result.stdout.strip()
+    if "install ok installed" not in line:
+        return None
+    parts = line.split()
+    return parts[-1] if parts else None
 
-def _ensure_refcount(app_id: str) -> Path:
-    path = get_refcount_path(app_id)
-    # Ensure parent directories as well
-    if not path.exists():
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text("0")
-    return path
+
+def _version_satisfies(installed: str, operator: str, required: str) -> bool:
+    """
+    packaging.version.Version 으로 비교.
+    파싱 실패 시 문자열 비교로 fallback.
+    """
+    try:
+        iv = Version(installed)
+        rv = Version(required)
+        ops = {
+            ">=": iv >= rv,
+            "<=": iv <= rv,
+            "==": iv == rv,
+            ">":  iv >  rv,
+            "<":  iv <  rv,
+        }
+        return ops.get(operator, False)
+    except InvalidVersion:
+        # epoch 등 debian 전용 버전 → 문자열 fallback (단순 비교)
+        ops_str = {
+            ">=": installed >= required,
+            "<=": installed <= required,
+            "==": installed == required,
+            ">":  installed >  required,
+            "<":  installed <  required,
+        }
+        return ops_str.get(operator, False)
+
+
+def list_missing_base_packages(path: str) -> list[str]:
+    """
+    meta.json 의 "apt-requirements" 를 읽어 현재 미충족 항목을 반환.
+    반환값은 원본 요구사항 문자열 그대로 (예: "python3-venv>=3.11").
+    """
+    requirements: list[str] = get_meta_value(path, "apt-requirements", [])
+    if not requirements:
+        return []
+
+    missing = []
+    for req in requirements:
+        pkg_name, operator, req_ver = _parse_pkg_requirement(req)
+        installed_ver = _get_installed_version(pkg_name)
+
+        if installed_ver is None:
+            # 아예 설치 안 됨
+            missing.append(req)
+            continue
+
+        if operator is not None and req_ver is not None:
+            # 설치는 됐지만 버전 미충족
+            if not _version_satisfies(installed_ver, operator, req_ver):
+                missing.append(req)
+
+    return missing
