@@ -236,6 +236,11 @@ def main():
         output = args.output
     else:
         bundle_name = Path(bundle).name.rstrip("/")
+
+        # .apprunxproj 라면 apprunx 로 단순 변환
+        if bundle_name.endswith(".apprunxproj"):
+            bundle_name = bundle_name[:-len(".apprunxproj")]
+
         output = f"{bundle_name}.apprunx"
 
     # 출력 경로가 .apprunx 로 끝나지 않으면 경고
