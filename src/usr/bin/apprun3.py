@@ -6,6 +6,7 @@ apprun3 — AppRun Format 3 실행기 및 유틸리티
 import shlex
 import sys
 import os
+import re
 import subprocess
 import time
 import shutil
@@ -597,6 +598,418 @@ StartupWMClass={app_id}
     desktop_file.write_text(desktop_content)
     desktop_file.chmod(0o755)
 
+
+# ==============================================================================
+# 서비스 단순 설치 핸들러
+# ==============================================================================
+# --install-services 는 번들 내에 "services" 폴더가 있을 때, 그 안의 .service 파일들을 시스템에 설치하는 용도입니다.
+# .service 파일은 systemd 서비스 유닛 파일로, 일반적으로 /etc/systemd/system/ 에 설치됩니다. 이 기능은 AppRun 번들이 시스템 서비스도 함께 제공하는 경우에 유용합니다.
+
+
+SYSTEMD_UNIT_DIR = Path("/etc/systemd/system")
+
+
+def _systemctl_batch(actions: list[str], svc_names: list[str]) -> int:
+    """
+    여러 systemctl 명령을 하나의 셸 호출로 묶어 실행.
+    actions: ["enable", "start"] 등
+    svc_names: ["my-app.service", "my-app-worker.service"] 등
+
+    pkexec 호출을 한 번만 하므로 인증 팝업이 한 번만 뜸.
+    """
+    if not svc_names:
+        return 0
+
+    # systemctl enable a.service b.service; systemctl start a.service b.service
+    commands = "; ".join(
+        f"systemctl {action} {' '.join(svc_names)}"
+        for action in actions
+    )
+
+    if os.geteuid() == 0:
+        prefix = []
+    elif _pkexec_available():
+        prefix = ["pkexec"]
+    else:
+        print("Error: root 권한이 필요합니다.", file=sys.stderr)
+        return 1
+
+    proc = subprocess.run(
+        prefix + ["bash", "-c", commands],
+        capture_output=True, text=True
+    )
+    if proc.returncode != 0:
+        print(f"Error: systemctl 실행 실패: {proc.stderr}", file=sys.stderr)
+        return proc.returncode
+
+    return 0
+
+def handle_install_services(apprunx: str, enable: bool, start: bool) -> int:
+    """
+    번들 내 services/ 폴더의 .service 파일들을 /etc/systemd/system/ 에 설치.
+    """
+    app_id = libapprun.get_bundle_id(apprunx)
+
+    # 번들 내 서비스 파일 목록 확인
+    try:
+        file_list = libapprun.list_files(apprunx)
+    except Exception as e:
+        print(f"Error: 번들 파일 목록을 읽을 수 없습니다: {e}", file=sys.stderr)
+        return 1
+
+    service_files = [f for f in file_list if f.startswith("services/") and f.endswith(".service")]
+
+    if not service_files:
+        print("Error: 번들 내에 services/*.service 파일이 없습니다.", file=sys.stderr)
+        return 1
+
+    if not _pkexec_available() and os.geteuid() != 0:
+        print("Error: 서비스 설치에는 root 권한이 필요합니다.", file=sys.stderr)
+        return 1
+
+    installed = []
+    for svc_path in service_files:
+        svc_name = Path(svc_path).name
+        try:
+            data = libapprun.peek_file_bytes(apprunx, svc_path)
+        except FileNotFoundError:
+            print(f"Warning: '{svc_path}' 를 읽을 수 없습니다. 건너뜁니다.", file=sys.stderr)
+            continue
+
+        dest = SYSTEMD_UNIT_DIR / svc_name
+
+        # root 가 아니면 pkexec tee 로 쓰기
+        if os.geteuid() != 0:
+            proc = subprocess.run(
+                ["pkexec", "tee", str(dest)],
+                input=data, capture_output=True
+            )
+            if proc.returncode != 0:
+                print(f"Error: '{svc_name}' 설치 실패.", file=sys.stderr)
+                return 1
+        else:
+            dest.write_bytes(data)
+
+        installed.append(svc_name)
+        print(f"  설치됨: {svc_name}")
+
+    # systemctl daemon-reload
+    _systemctl_daemon_reload()
+
+    print(f"\n{len(installed)}개 서비스 파일 설치 완료.")
+
+    actions = []
+    if enable:
+        actions.append("enable")
+    if start:
+        actions.append("start")
+
+    if actions:
+        result = _systemctl_batch(actions, installed)
+        if result != 0:
+            return result
+    else:
+        print("서비스를 활성화하려면: sudo systemctl enable --now <서비스명>")
+    return 0
+
+
+
+# ==============================================================================
+# 서비스 생성 후 설치 핸들러
+# ==============================================================================
+# --install-as-service=<type>,<after>+<after>+<after>....,<before>+<before>+<before>....
+# 예:
+# --install-as-service=oneshot,plymouth-quit-wait.service+systemd-user-sessions.service,network.target
+# 위 예시는 oneshot 타입의 서비스를 생성하여 plymouth-quit-wait.service 와 systemd-user-sessions.service 이후에, network.target 이전에 실행되도록 설정합니다.
+# 위 설정에 따라 .service 파일을 만들고, .service 파일의 이름을 {app_id 특수문자를 - 로 치환}.service 로 합니다.
+
+def _sanitize_service_name(app_id: str) -> str:
+    """app_id 의 특수문자를 '-' 로 치환하여 서비스 이름으로 사용."""
+    return re.sub(r'[^.A-Za-z0-9_\-]', '-', app_id)
+
+
+def handle_install_as_service(apprunx: str, spec: str, enable: bool, start: bool) -> int:
+    """
+    --install-as-service=<type>,<after>+<after>...,<before>+<before>...
+    지정된 설정으로 .service 파일을 생성하고 /etc/systemd/system/ 에 설치.
+    """
+    app_id = libapprun.get_bundle_id(apprunx)
+    apprunx_abs = str(Path(apprunx).resolve())
+
+    # spec 파싱
+    parts = spec.split(",")
+    if len(parts) < 1 or not parts[0].strip():
+        print("Error: 서비스 타입이 지정되지 않았습니다.", file=sys.stderr)
+        print("사용법: --install-as-service=<type>[,<after>][,<before>]", file=sys.stderr)
+        return 1
+
+    svc_type = parts[0].strip()
+    valid_types = ("simple", "oneshot", "forking", "notify", "idle")
+    if svc_type not in valid_types:
+        print(f"Error: 알 수 없는 서비스 타입 '{svc_type}'.", file=sys.stderr)
+        print(f"지원 타입: {', '.join(valid_types)}", file=sys.stderr)
+        return 1
+
+    after_units = ""
+    before_units = ""
+    if len(parts) >= 2 and parts[1].strip():
+        after_units = " ".join(parts[1].strip().split("+"))
+    if len(parts) >= 3 and parts[2].strip():
+        before_units = " ".join(parts[2].strip().split("+"))
+
+    svc_name = _sanitize_service_name(app_id)
+    meta = libapprun.get_bundle_meta(apprunx)
+    description = meta.get("description", meta.get("name", app_id))
+
+    # ExecStart 구성
+    exec_start = f"/usr/bin/apprun3 {apprunx_abs}"
+
+    # .service 파일 생성
+    unit_lines = [
+        "[Unit]",
+        f"Description={description}",
+    ]
+    if after_units:
+        unit_lines.append(f"After={after_units}")
+    if before_units:
+        unit_lines.append(f"Before={before_units}")
+
+    service_lines = [
+        "",
+        "[Service]",
+        f"Type={svc_type}",
+        f"ExecStart={exec_start}",
+    ]
+
+    # oneshot 은 보통 RemainAfterExit 를 켜줌
+    if svc_type == "oneshot":
+        service_lines.append("RemainAfterExit=yes")
+
+    install_lines = [
+        "",
+        "[Install]",
+        "WantedBy=multi-user.target",
+    ]
+
+    unit_content = "\n".join(unit_lines + service_lines + install_lines) + "\n"
+    unit_bytes = unit_content.encode("utf-8")
+
+    dest = SYSTEMD_UNIT_DIR / f"{svc_name}.service"
+
+    if not _pkexec_available() and os.geteuid() != 0:
+        print("Error: 서비스 설치에는 root 권한이 필요합니다.", file=sys.stderr)
+        return 1
+
+    # 파일 쓰기
+    if os.geteuid() != 0:
+        proc = subprocess.run(
+            ["pkexec", "tee", str(dest)],
+            input=unit_bytes, capture_output=True
+        )
+        if proc.returncode != 0:
+            print(f"Error: 서비스 파일 설치 실패.", file=sys.stderr)
+            return 1
+    else:
+        dest.write_bytes(unit_bytes)
+
+    _systemctl_daemon_reload()
+
+    actions = []
+    if enable:
+        actions.append("enable")
+    if start:
+        actions.append("start")
+
+    if actions:
+        result = _systemctl_batch(actions, [svc_name])
+        if result != 0:
+            return result
+
+    print(f"서비스 설치 완료: {svc_name}.service")
+    print(f"  타입:   {svc_type}")
+    if after_units:
+        print(f"  After:  {after_units}")
+    if before_units:
+        print(f"  Before: {before_units}")
+    print(f"  경로:   {dest}")
+
+    if not enable or not start:
+        print(f"\n활성화: sudo systemctl enable --now {svc_name}.service")
+    return 0
+
+
+
+# ==============================================================================
+# 서비스 단순 제거 핸들러
+# ==============================================================================
+
+def handle_uninstall_services(apprunx: str) -> int:
+    """
+    번들 내 services/ 폴더의 .service 파일명과 동일한 유닛을
+    중지 → 비활성화 → 삭제.
+    """
+    try:
+        file_list = libapprun.list_files(apprunx)
+    except Exception as e:
+        print(f"Error: 번들 파일 목록을 읽을 수 없습니다: {e}", file=sys.stderr)
+        return 1
+
+    service_files = [Path(f).name for f in file_list if f.startswith("services/") and f.endswith(".service")]
+
+    if not service_files:
+        print("Error: 번들 내에 services/*.service 파일이 없습니다.", file=sys.stderr)
+        return 1
+
+    if not _pkexec_available() and os.geteuid() != 0:
+        print("Error: 서비스 제거에는 root 권한이 필요합니다.", file=sys.stderr)
+        return 1
+
+    removed = []
+    for svc_name in service_files:
+        dest = SYSTEMD_UNIT_DIR / svc_name
+        if not dest.exists():
+            print(f"  건너뜀 (미설치): {svc_name}")
+            continue
+
+        _systemctl_stop_disable(svc_name)
+        _remove_unit_file(dest)
+        removed.append(svc_name)
+        print(f"  제거됨: {svc_name}")
+
+    _systemctl_daemon_reload()
+
+    print(f"\n{len(removed)}개 서비스 파일 제거 완료.")
+    return 0
+
+
+# ==============================================================================
+# 생성된 서비스 제거 핸들러
+# ==============================================================================
+
+def handle_uninstall_as_service(apprunx: str) -> int:
+    """
+    --install-as-service 로 생성된 {sanitized_app_id}.service 를
+    중지 → 비활성화 → 삭제.
+    """
+    app_id = libapprun.get_bundle_id(apprunx)
+    svc_name = f"{_sanitize_service_name(app_id)}.service"
+    dest = SYSTEMD_UNIT_DIR / svc_name
+
+    if not dest.exists():
+        print(f"Error: 서비스 파일이 존재하지 않습니다: {dest}", file=sys.stderr)
+        return 1
+
+    if not _pkexec_available() and os.geteuid() != 0:
+        print("Error: 서비스 제거에는 root 권한이 필요합니다.", file=sys.stderr)
+        return 1
+
+    _systemctl_stop_disable(svc_name)
+    _remove_unit_file(dest)
+    _systemctl_daemon_reload()
+
+    print(f"서비스 제거 완료: {svc_name}")
+    return 0
+
+
+# ==============================================================================
+# systemd 헬퍼
+# ==============================================================================
+
+def _sudo_cmd() -> list[str]:
+    """root 가 아니면 pkexec 을 앞에 붙인 리스트 반환."""
+    if os.geteuid() == 0:
+        return []
+    return ["pkexec"]
+
+
+def _systemctl_daemon_reload() -> None:
+    subprocess.run(_sudo_cmd() + ["systemctl", "daemon-reload"],
+                   capture_output=True)
+
+
+def _systemctl_stop_disable(svc_name: str) -> None:
+    prefix = _sudo_cmd()
+    subprocess.run(prefix + ["systemctl", "stop", svc_name],
+                   capture_output=True)
+    subprocess.run(prefix + ["systemctl", "disable", svc_name],
+                   capture_output=True)
+
+
+def _remove_unit_file(path: Path) -> None:
+    if os.geteuid() == 0:
+        path.unlink(missing_ok=True)
+    else:
+        subprocess.run(["pkexec", "rm", "-f", str(path)],
+                       capture_output=True)
+
+
+# ==============================================================================
+# 도움말
+# ==============================================================================
+
+HELP_TEXT = """\
+apprun3 — AppRun Format 3 실행기 및 유틸리티
+
+사용법:
+    apprun3 [--flags] <apprunx> [앱 인자...]
+
+flags 없이 실행하면 번들을 실행합니다.
+flags 가 있으면 해당 작업을 수행하고 종료합니다.
+
+정보 조회:
+    --id                        번들 ID 출력
+    --is-format3                Format 3 여부 출력 (true/false)
+    --info                      전체 메타데이터 출력
+    --info=key1,key2,...        지정한 키만 출력
+    --box-path                  Box 디렉터리 경로 출력
+
+준비 및 등록:
+    --prepare                   실행 환경 준비 (마운트, venv, 의존성 설치)
+    --register                  --prepare 수행 후 .desktop 파일 등록
+
+파일 추출:
+    --extract-file-from=<내부경로> --extract-file-to=<대상경로>
+                                번들 내 파일을 지정 경로로 추출
+                                (두 옵션은 반드시 함께 사용)
+
+서비스 관리:
+    --install-services          번들 내 services/*.service 파일을
+                                /etc/systemd/system/ 에 설치
+                                --enable: [추가 옵션] 설치 과정에서 자동으로 활성화
+                                --start : [추가 옵션] 설치 과정에서 자동으로 시작 (자동으로 활성화 트리거)
+                                
+    --uninstall-services        번들 내 services/*.service 에 해당하는
+                                시스템 서비스를 중지·비활성화·삭제
+
+    --install-as-service=<type>,<after>,<before>
+                                지정 설정으로 systemd 서비스를 생성하여 설치
+                                  type   : simple, oneshot, forking, notify, idle
+                                  after   : After= 유닛 (+ 로 구분)
+                                  before  : Before= 유닛 (+ 로 구분)
+                                예: --install-as-service=oneshot,network.target,multi-user.target
+
+    --uninstall-as-service      --install-as-service 로 생성된 서비스를
+                                중지·비활성화·삭제
+
+기타:
+    --help, -h                  이 도움말 출력
+
+예시:
+    apprun3 my-app.apprunx                          번들 실행
+    apprun3 my-app.apprunx --verbose --port 8080    앱에 인자 전달
+    apprun3 --id my-app.apprunx                     번들 ID 확인
+    apprun3 --info=name,version my-app.apprunx      이름과 버전 확인
+    apprun3 --prepare my-app.apprunx                실행 환경만 준비
+    apprun3 --register my-app.apprunx               데스크톱 등록
+    apprun3 --install-as-service=oneshot,plymouth-quit-wait.service+systemd-user-sessions.service,network.target my-app.apprunx
+"""
+
+
+def handle_help() -> int:
+    print(HELP_TEXT, end="")
+    return 0
+
+
 # ==============================================================================
 # 인자 파싱
 # ==============================================================================
@@ -608,10 +1021,12 @@ def parse_args(argv: list[str]):
 
     while i < len(remaining):
         arg = remaining[i]
-        if not arg.startswith("--"):
+        if not arg.startswith("--") and arg != "-h":
             break
 
-        if arg == "--id":
+        if arg in ("--help", "-h"):
+            flags["help"] = True
+        elif arg == "--id":
             flags["id"] = True
         elif arg == "--is-format3":
             flags["is_format3"] = True
@@ -629,11 +1044,28 @@ def parse_args(argv: list[str]):
             flags["extract_file_to"] = arg[len("--extract-file-to="):]
         elif arg == "--register":
             flags["register"] = True
+        elif arg == "--install-services":
+            flags["install_services"] = True
+        elif arg == "--start":
+            flags["service_install_and_enable"] = True
+            flags["service_install_and_start"] = True
+        elif arg == "--enable":
+            flags["service_install_and_enable"] = True
+        elif arg.startswith("--install-as-service="):
+            flags["install_as_service"] = arg[len("--install-as-service="):]
+        elif arg == "--uninstall-services":
+            flags["uninstall_services"] = True
+        elif arg == "--uninstall-as-service":
+            flags["uninstall_as_service"] = True
         else:
             print(f"Error: 알 수 없는 옵션 '{arg}'", file=sys.stderr)
             sys.exit(2)
 
         remaining.pop(i)
+
+    # --help 는 apprunx 경로 없이도 동작
+    if "help" in flags:
+        return flags, None, []
 
     # --extract-file-from/to 쌍 검사
     has_from = "extract_file_from" in flags
@@ -656,6 +1088,9 @@ def parse_args(argv: list[str]):
 def main():
     flags, apprunx, extra_args = parse_args(sys.argv[1:])
 
+    if flags.get("help"):
+        sys.exit(handle_help())
+
     if not Path(apprunx).exists():
         print(f"Error: 파일을 찾을 수 없습니다: {apprunx}", file=sys.stderr)
         sys.exit(1)
@@ -673,6 +1108,10 @@ def main():
                 flags["extract_file_from"],
                 flags["extract_file_to"]
             ))
+        if "install_services" in flags: sys.exit(handle_install_services(apprunx, flags["service_install_and_enable"], flags["service_install_and_start"]))
+        if "install_as_service" in flags: sys.exit(handle_install_as_service(apprunx, flags["install_as_service"], flags["service_install_and_enable"], flags["service_install_and_start"]))
+        if "uninstall_services" in flags: sys.exit(handle_uninstall_services(apprunx))
+        if "uninstall_as_service" in flags: sys.exit(handle_uninstall_as_service(apprunx))
 
     sys.exit(handle_run(apprunx, extra_args))
 
