@@ -1,0 +1,12 @@
+[Unit]
+Description=AppRun DropIn for Format 3 Service
+After=graphical.target systemd-user-sessions.service
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/
+ExecStart=/usr/bin/apprun.sh /usr/lib/AppRun/apprundropinf3.apprun
+
+[Install]
+WantedBy=graphical.target
