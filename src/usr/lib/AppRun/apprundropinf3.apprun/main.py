@@ -282,8 +282,12 @@ def _build_desktop_content(
                 final.append(line)
         else:
             final.append(line)
-    if not has_icon and icon_extracted:
-        final.append(f"Icon=apprun-{app_id}")
+
+    if not has_icon:
+        if icon_extracted:
+            final.append(f"Icon=apprun-{app_id}")
+        else:
+            final.append("Icon=apprun-default")
 
     # StartupWMClass
     if not any(l.strip().startswith("StartupWMClass=") for l in final):
@@ -291,6 +295,48 @@ def _build_desktop_content(
 
     return "\n".join(final) + "\n"
 
+def _generate_desktop_from_meta(apprunx_path: str) -> Optional[bytes]:
+    """
+    meta.json 을 읽어 .desktop 파일 내용을 생성.
+    name 이 없으면 None 반환 (등록 불가).
+    """
+    meta = libapprun.get_bundle_meta(apprunx_path)
+    if not meta:
+        return None
+
+    name = meta.get("name", "").strip()
+    if not name:
+        return None
+
+    try:
+        app_id = libapprun.get_bundle_id(apprunx_path)
+    except Exception:
+        app_id = Path(apprunx_path).stem
+
+    app_type    = meta.get("type", "Application")
+    description = meta.get("description", "")
+    terminal    = "true" if meta.get("launch_in_terminal", False) else "false"
+    args_launch = meta.get("desktopfile-args", [])
+
+    # 각 args 에 quotation 으로 감싸기
+    for i, arg in enumerate(args_launch):
+        if not (arg.startswith('"') and arg.endswith('"')):
+            args_launch[i] = f'"{arg}"'
+
+    lines = [
+        "[Desktop Entry]",
+        f"Name={name}",
+        f"Type={app_type}",
+        f"Exec=apprun3 {apprunx_path} {' '.join(args_launch)}",
+        f"Terminal={terminal}",
+        f"StartupWMClass={app_id}",
+        "Categories=Application;",
+    ]
+
+    if description:
+        lines.append(f"Comment={description}")
+
+    return ("\n".join(lines) + "\n").encode("utf-8")
 
 def register_desktop(
     apprunx_path: str,
@@ -304,11 +350,19 @@ def register_desktop(
     """
     apprunx_path = str(Path(apprunx_path).resolve())
 
-    # .desktop 파일 읽기
+    DEFAULT_ICON = Path("/usr/share/apprun/default-icon.png")
+
+    # .desktop 파일 읽기 시도
     try:
         desktop_data = libapprun.peek_file_bytes(apprunx_path, DESKTOP_INNER_PATH)
     except (FileNotFoundError, RuntimeError):
-        return False
+        desktop_data = None
+
+    # desktopfile.desktop 이 없으면 meta.json 으로 생성
+    if desktop_data is None:
+        desktop_data = _generate_desktop_from_meta(apprunx_path)
+        if desktop_data is None:
+            return False  # meta.json 도 없거나 name 이 없으면 스킵
 
     new_hash = hash_bytes(desktop_data)
     target_names = sorted(u.username for u in target_users)
@@ -340,6 +394,7 @@ def register_desktop(
 
     # 각 사용자에게 등록
     for user in target_users:
+
         desktop_file = user.desktop_dir / f"apprun-dropin-{app_id}.desktop"
         try:
             _write_as_user(desktop_file, content, user, mode=0o755)
@@ -353,6 +408,15 @@ def register_desktop(
                 _write_as_user(icon_file, icon_data, user)
             except OSError as e:
                 print(f"[DropIn] 경고: {user.username} 아이콘 쓰기 실패: {e}", file=sys.stderr)
+        else:
+            # 번들에 아이콘이 없으면 기본 아이콘 복사
+            if DEFAULT_ICON.exists():
+                default_dest = user.icons_dir / "apprun-default.png"
+                if not default_dest.exists():
+                    try:
+                        _write_as_user(default_dest, DEFAULT_ICON.read_bytes(), user)
+                    except OSError:
+                        pass
 
     # 캐시 업데이트
     action = "업데이트" if cached else "등록"
@@ -531,6 +595,39 @@ class PasswdEventHandler(pyinotify.ProcessEvent):
 # 서비스 상태 관리
 # ==============================================================================
 
+def _find_owner_user(dir_path: str, users: list[UserInfo]) -> Optional[UserInfo]:
+    """
+    경로가 특정 사용자의 홈 디렉터리 하위에 있으면 해당 사용자를 반환.
+    global 경로이거나 매칭되는 사용자가 없으면 None.
+    """
+    for user in users:
+        if dir_path.startswith(str(user.home) + "/"):
+            return user
+    return None
+
+
+def _chown_recursive(path: Path, user: UserInfo) -> None:
+    """
+    path 및 그 상위 디렉터리 중 사용자 홈 하위에 있는 것들의
+    소유권을 해당 사용자로 변경.
+    """
+    home_str = str(user.home)
+    # path 자체
+    try:
+        os.chown(str(path), user.uid, -1)
+    except OSError:
+        pass
+
+    # 상위 디렉터리 (홈 바로 아래까지)
+    current = path.parent
+    while str(current).startswith(home_str + "/") and current != user.home:
+        try:
+            os.chown(str(current), user.uid, -1)
+        except OSError:
+            pass
+        current = current.parent
+
+
 class ServiceState:
     """
     서비스 전체 상태를 관리. 사용자 목록 갱신 시 watch 재구성 담당.
@@ -564,12 +661,17 @@ class ServiceState:
         """현재 dir_to_users 의 모든 디렉터리에 inotify watch 설정."""
         handler = ApprunxEventHandler(self.cache, self.dir_to_users)
 
-        for dir_path in self.dir_to_users:
+        for dir_path, users in self.dir_to_users.items():
             if dir_path in self._watch_descriptors:
                 continue  # 이미 감시 중
             p = Path(dir_path)
             try:
-                p.mkdir(parents=True, exist_ok=True)
+                if not p.exists():
+                    p.mkdir(parents=True, exist_ok=True)
+                    # 사용자 홈 하위 경로면 해당 사용자 소유로 변경
+                    owner = _find_owner_user(dir_path, users)
+                    if owner:
+                        _chown_recursive(p, owner)
             except PermissionError:
                 print(f"[DropIn] 경고: 디렉터리 생성 불가: {dir_path}", file=sys.stderr)
                 continue
