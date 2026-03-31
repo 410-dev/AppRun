@@ -105,6 +105,8 @@ def handle_prepare(apprunx: str, mount_path: Path, register: bool) -> int:
     if (Path(bundle) / "main.py").exists():
         result = _prepare_python(bundle, app_id, box)
         if result != 0:
+            # venv 삭제
+            shutil.rmtree(box / "pyvenv", ignore_errors=True)
             return result
 
     if register:
@@ -124,7 +126,7 @@ def _validate_entry(bundle: str) -> bool:
         (b / "main").exists() and os.access(b / "main", os.X_OK),
     ])
 
-def _run_cmd_gui_term_prefer(gui_cmds: list[str]) -> int:
+def _run_cmd_gui_term_prefer(gui_cmds: list[str]) -> bool:
 
     terminal = _find_terminal()
 
@@ -197,13 +199,13 @@ def _prepare_python(bundle: str, app_id: str, box: Path) -> int:
         subprocess.run([UV_BIN, "venv", str(box / "pyvenv")], check=True)
 
     # GUI 면 터미널 에뮬레이터에서 진행
-    returncode = _run_cmd_gui_term_prefer([
+    success = _run_cmd_gui_term_prefer([
         UV_BIN, "pip", "install",
         "--python", str(venv_py),
         "-r", str(req_file)
     ])
 
-    if returncode != 0:
+    if not success:
         print("Error: 패키지 설치 실패", file=sys.stderr)
         libapprun.notify("[AppRun] 설치 실패", f"{app_id} 패키지 설치 실패")
         return 1
@@ -263,8 +265,8 @@ def _install_packages_gui(pkg_names: list[str]) -> bool:
 
     apt_cmd = ["pkexec", "apt", "install", "-y"] + pkg_names
 
-    _run_cmd_gui_term_prefer(apt_cmd)
-    return True
+    return _run_cmd_gui_term_prefer(apt_cmd)
+
 
 def _install_packages_cli(pkg_names: list[str], auto: bool = False) -> bool:
     """
