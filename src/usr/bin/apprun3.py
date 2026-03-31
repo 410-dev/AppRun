@@ -123,6 +123,48 @@ def _validate_entry(bundle: str) -> bool:
         (b / "main").exists() and os.access(b / "main", os.X_OK),
     ])
 
+def _run_cmd_gui_term_prefer(gui_cmds: list[str]) -> int:
+
+    terminal = _find_terminal()
+
+    if terminal:
+        # exit code 를 임시 파일에 기록
+        with tempfile.NamedTemporaryFile(
+            mode='w', suffix='.exitcode', delete=False
+        ) as f:
+            exitcode_file = f.name
+
+        try:
+            shell_cmd = (
+                " ".join(gui_cmds) + "; "
+                "success=$?; "
+                f"echo $success > {exitcode_file}; "
+                "if [ $success -eq 0 ]; then "
+                "  echo ''; echo '✅ 설치 완료. 3초 후 창이 닫힙니다'; sleep 3; "
+                "else "
+                "  echo ''; echo '❌ 설치 실패. 창을 닫으려면 아무 키나 누르세요'; read -n 1; "
+                "fi"
+            )
+
+            proc = subprocess.run(terminal + ["bash", "-c", shell_cmd])
+
+            # 임시 파일에서 실제 exit code 읽기
+            try:
+                actual_code = int(Path(exitcode_file).read_text().strip())
+            except (ValueError, FileNotFoundError):
+                # 파일이 없다 = 터미널 자체가 비정상 종료 (pkexec 취소 등)
+                actual_code = proc.returncode if proc.returncode != 0 else 1
+
+            return actual_code == 0
+
+        finally:
+            Path(exitcode_file).unlink(missing_ok=True)
+
+    else:
+        libapprun.notify("[AppRun] 의존성 설치중", f"[AppRun] 터미널 에뮬레이터를 찾을 수 없습니다. 명령을 백그라운드에서 실행합니다: {' '.join(gui_cmds)}")
+        proc = subprocess.run(gui_cmds)
+        return proc.returncode == 0
+
 
 def _prepare_python(bundle: str, app_id: str, box: Path) -> int:
     venv_py       = box / "pyvenv" / "bin" / "python3"
@@ -134,6 +176,7 @@ def _prepare_python(bundle: str, app_id: str, box: Path) -> int:
         if result.returncode != 0:
             print("Error: venv 생성 실패", file=sys.stderr)
             return 1
+
 
     if not req_file.exists():
         return 0
@@ -152,12 +195,14 @@ def _prepare_python(bundle: str, app_id: str, box: Path) -> int:
         shutil.rmtree(box / "pyvenv", ignore_errors=True)
         subprocess.run([UV_BIN, "venv", str(box / "pyvenv")], check=True)
 
-    install = subprocess.run([
+    # GUI 면 터미널 에뮬레이터에서 진행
+    returncode = _run_cmd_gui_term_prefer([
         UV_BIN, "pip", "install",
         "--python", str(venv_py),
         "-r", str(req_file)
     ])
-    if install.returncode != 0:
+
+    if returncode != 0:
         print("Error: 패키지 설치 실패", file=sys.stderr)
         libapprun.notify("[AppRun] 설치 실패", f"{app_id} 패키지 설치 실패")
         return 1
@@ -217,45 +262,8 @@ def _install_packages_gui(pkg_names: list[str]) -> bool:
 
     apt_cmd = ["pkexec", "apt", "install", "-y"] + pkg_names
 
-    terminal = _find_terminal()
-
-    if terminal:
-        # exit code 를 임시 파일에 기록
-        with tempfile.NamedTemporaryFile(
-            mode='w', suffix='.exitcode', delete=False
-        ) as f:
-            exitcode_file = f.name
-
-        try:
-            shell_cmd = (
-                " ".join(apt_cmd) + "; "
-                "success=$?; "
-                f"echo $success > {exitcode_file}; "
-                "if [ $success -eq 0 ]; then "
-                "  echo ''; echo '--- 설치 완료. 5초 후 창이 닫힙니다 ---'; sleep 5; "
-                "else "
-                "  echo ''; echo '--- 설치 실패. 창을 닫으려면 아무 키나 누르세요 ---'; read -n 1; "
-                "fi"
-            )
-
-            proc = subprocess.run(terminal + ["bash", "-c", shell_cmd])
-
-            # 임시 파일에서 실제 exit code 읽기
-            try:
-                actual_code = int(Path(exitcode_file).read_text().strip())
-            except (ValueError, FileNotFoundError):
-                # 파일이 없다 = 터미널 자체가 비정상 종료 (pkexec 취소 등)
-                actual_code = proc.returncode if proc.returncode != 0 else 1
-
-            return actual_code == 0
-
-        finally:
-            Path(exitcode_file).unlink(missing_ok=True)
-
-    else:
-        libapprun.notify("[AppRun] 의존성 설치중", f"[AppRun] 터미널 에뮬레이터를 찾을 수 없습니다. pkexec 로 직접 실행: {' '.join(apt_cmd)}")
-        proc = subprocess.run(apt_cmd)
-        return proc.returncode == 0
+    _run_cmd_gui_term_prefer(apt_cmd)
+    return True
 
 def _install_packages_cli(pkg_names: list[str], auto: bool = False) -> bool:
     """
