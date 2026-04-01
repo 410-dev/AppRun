@@ -796,6 +796,7 @@ def handle_install_as_service(apprunx: str, spec: str, enable: bool, start: bool
         "",
         "[Service]",
         f"Type={svc_type}",
+        "Environment=PYTHONUNBUFFERED=1",
         f"ExecStart={exec_start}",
         f"User={user}",
     ]
