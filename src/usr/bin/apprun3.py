@@ -3,6 +3,7 @@
 apprun3 — AppRun Format 3 실행기 및 유틸리티
 /usr/bin/apprun3
 """
+import pwd
 import shlex
 import sys
 import os
@@ -20,6 +21,20 @@ import libapprun
 UV_BIN      = "/usr/local/bin/uv"
 PYTHON3_BIN = "/usr/bin/python3"
 
+def get_real_user():
+    """sudo 환경이든 아니든 실제 사용자를 반환"""
+    # sudo로 실행된 경우
+    sudo_user = os.environ.get('SUDO_USER')
+    if sudo_user:
+        return sudo_user
+    
+    # sudo_uid로 시도
+    sudo_uid = os.environ.get('SUDO_UID')
+    if sudo_uid:
+        return pwd.getpwuid(int(sudo_uid)).pw_name
+    
+    # 일반 실행인 경우
+    return pwd.getpwuid(os.getuid()).pw_name
 
 # ==============================================================================
 # Flag 핸들러
@@ -730,13 +745,14 @@ def _sanitize_service_name(app_id: str) -> str:
     return re.sub(r'[^.A-Za-z0-9_\-]', '-', app_id)
 
 
-def handle_install_as_service(apprunx: str, spec: str, enable: bool, start: bool) -> int:
+def handle_install_as_service(apprunx: str, spec: str, enable: bool, start: bool, user: str) -> int:
     """
     --install-as-service=<type>,<after>+<after>...,<before>+<before>...
     지정된 설정으로 .service 파일을 생성하고 /etc/systemd/system/ 에 설치.
     """
     app_id = libapprun.get_bundle_id(apprunx)
     apprunx_abs = str(Path(apprunx).resolve())
+    user = get_real_user() if user is None else user
 
     # spec 파싱
     parts = spec.split(",")
@@ -781,6 +797,7 @@ def handle_install_as_service(apprunx: str, spec: str, enable: bool, start: bool
         "[Service]",
         f"Type={svc_type}",
         f"ExecStart={exec_start}",
+        f"User={user}",
     ]
 
     # oneshot 은 보통 RemainAfterExit 를 켜줌
@@ -985,9 +1002,10 @@ flags 가 있으면 해당 작업을 수행하고 종료합니다.
 
     --install-as-service=<type>,<after>,<before>
                                 지정 설정으로 systemd 서비스를 생성하여 설치
-                                  type   : simple, oneshot, forking, notify, idle
-                                  after   : After= 유닛 (+ 로 구분)
-                                  before  : Before= 유닛 (+ 로 구분)
+                                  type   : [필수] simple, oneshot, forking, notify, idle
+                                  after   : [선택] After= 유닛 (+ 로 구분) (예: network.target+network-online.target+...)
+                                  before  : [선택] Before= 유닛 (+ 로 구분)
+                                  user    : [선택] 서비스 실행 사용자
                                 예: --install-as-service=oneshot,network.target,multi-user.target
 
     --uninstall-as-service      --install-as-service 로 생성된 서비스를
@@ -1055,6 +1073,8 @@ def parse_args(argv: list[str]):
             flags["service_install_and_enable"] = True
         elif arg.startswith("--install-as-service="):
             flags["install_as_service"] = arg[len("--install-as-service="):]
+        elif arg.startswith("--user=") and "install_as_service" in flags:
+            flags["service_install_user"] = arg[len("--user="):]
         elif arg == "--uninstall-services":
             flags["uninstall_services"] = True
         elif arg == "--uninstall-as-service":
@@ -1111,7 +1131,7 @@ def main():
                 flags["extract_file_to"]
             ))
         if "install_services" in flags: sys.exit(handle_install_services(apprunx, flags.get("service_install_and_enable", False), flags.get("service_install_and_start", False)))
-        if "install_as_service" in flags: sys.exit(handle_install_as_service(apprunx, flags["install_as_service"], flags.get("service_install_and_enable", False), flags.get("service_install_and_start", False)))
+        if "install_as_service" in flags: sys.exit(handle_install_as_service(apprunx, flags["install_as_service"], flags.get("service_install_and_enable", False), flags.get("service_install_and_start", False), flags.get("service_install_user", None)))
         if "uninstall_services" in flags: sys.exit(handle_uninstall_services(apprunx))
         if "uninstall_as_service" in flags: sys.exit(handle_uninstall_as_service(apprunx))
 
