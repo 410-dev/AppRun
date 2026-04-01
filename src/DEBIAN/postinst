@@ -50,7 +50,7 @@ done
 /usr/bin/apprun-prepare.sh "/usr/lib/AppRun/apprundropin.apprun"
 /usr/bin/apprun-prepare.sh "/usr/lib/AppRun/apprundropinf3.apprun"
 systemctl enable --now /usr/lib/AppRun/apprundropin.apprun/apprundropin.service
-systemctl enable --now /usr/lib/AppRun/apprundropin.apprun/apprundropinf3.service
+systemctl enable --now /usr/lib/AppRun/apprundropinf3.apprun/apprundropinf3.service
 
 
 # Update the MIME database and icon caches, and clear thumbnail cache
