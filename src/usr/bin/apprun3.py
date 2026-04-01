@@ -1110,8 +1110,8 @@ def main():
                 flags["extract_file_from"],
                 flags["extract_file_to"]
             ))
-        if "install_services" in flags: sys.exit(handle_install_services(apprunx, flags["service_install_and_enable"], flags["service_install_and_start"]))
-        if "install_as_service" in flags: sys.exit(handle_install_as_service(apprunx, flags["install_as_service"], flags["service_install_and_enable"], flags["service_install_and_start"]))
+        if "install_services" in flags: sys.exit(handle_install_services(apprunx, flags.get("service_install_and_enable", False), flags.get("service_install_and_start", False)))
+        if "install_as_service" in flags: sys.exit(handle_install_as_service(apprunx, flags["install_as_service"], flags.get("service_install_and_enable", False), flags.get("service_install_and_start", False)))
         if "uninstall_services" in flags: sys.exit(handle_uninstall_services(apprunx))
         if "uninstall_as_service" in flags: sys.exit(handle_uninstall_as_service(apprunx))
 
