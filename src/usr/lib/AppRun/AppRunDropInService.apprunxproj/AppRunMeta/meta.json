@@ -1,0 +1,7 @@
+{
+    "name":               "AppRun DropIn Service",
+    "version":            "3.2.0",
+    "type":               "Application",
+    "author":             "Hoyoun Song",
+    "launch_in_terminal":  true
+}

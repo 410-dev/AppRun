@@ -1,24 +1,29 @@
 #!/bin/bash
 
-if [ -L /usr/local/bin/apprun ]; then
-    rm /usr/local/bin/apprun
-fi
+/usr/bin/apprun3 --uninstall-as-service /usr/lib/AppRun/AppRunDropinService.apprunx
 
-if [ -L /usr/local/bin/appid ]; then
-    rm /usr/local/bin/appid
-fi
 
-if [ -L /usr/local/bin/apprun-prepare ]; then
-    rm /usr/local/bin/apprun-prepare
-fi
+lns=(
+    "/usr/local/bin/apprun"
+    "/usr/local/bin/appid"
+    "/usr/local/bin/apprun-prepare"
+    "/usr/local/bin/apprunutil"
+    "/usr/local/bin/dictionary"
+    "/usr/bin/apprun"
+    "/usr/bin/appid"
+    "/usr/bin/apprun-prepare"
+    "/usr/bin/apprunutil"
+    "/usr/bin/dictionary"
+    "/usr/bin/apprun3"
+    "/usr/bin/apprun-package"
+    "/usr/bin/apprun3-package"
+)
 
-if [ -L /usr/local/bin/apprunutil ]; then
-    rm /usr/local/bin/apprunutil
-fi
-
-if [ -L /usr/local/bin/dictionary ]; then
-    rm /usr/local/bin/dictionary
-fi
+for file in "${lns[@]}"; do
+    if [ -L "${file}" ]; then
+        rm -f "${file}"
+    fi
+done
 
 systemctl stop apprundropin.service
 systemctl disable apprundropin.service

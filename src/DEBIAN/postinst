@@ -2,7 +2,13 @@
 
 set -e
 
-curl -LsSf https://astral.sh/uv/install.sh | sh
+if [ ! -f "/usr/local/bin/uv" ]; then
+    curl -LsSf https://astral.sh/uv/install.sh | sh
+    # Ensure the uv binary is executable
+    chmod +x "$HOME/.local/bin/uv"
+else
+    echo "uv is already installed in /usr/local/bin/uv"
+fi
 
 # Move $HOME/.local/bin/uv to /usr/local/bin/uv
 if [ -f "$HOME/.local/bin/uv" ]; then
@@ -25,8 +31,8 @@ fi
 orig_files_map_to=(
     "appid"
     "apprun"
-    "apprun3"
-    "apprun3-package"
+    "apprun-legacy"
+    "apprun-package"
     "apprun-prepare"
     "apprunutil"
     "apprunx-thumbnailer"
@@ -46,11 +52,15 @@ for file in "${orig_files_map_to[@]}"; do
     fi
 done
 
+# Backward compatibility for 3.0~3.2pre1
+ln -fs "/usr/bin/apprun" "/usr/bin/apprun3"
+ln -fs "/usr/bin/apprun-package" "/usr/bin/apprun3-package"
+
 
 /usr/bin/apprun-prepare.sh "/usr/lib/AppRun/apprundropin.apprun"
-/usr/bin/apprun-prepare.sh "/usr/lib/AppRun/apprundropinf3.apprun"
 systemctl enable --now /usr/lib/AppRun/apprundropin.apprun/apprundropin.service
-systemctl enable --now /usr/lib/AppRun/apprundropinf3.apprun/apprundropinf3.service
+
+/usr/bin/apprun3 --install-as-service=simple,graphical.target+systemd-user-sessions.service /usr/lib/AppRun/AppRunDropInService.apprunx
 
 
 # Update the MIME database and icon caches, and clear thumbnail cache
