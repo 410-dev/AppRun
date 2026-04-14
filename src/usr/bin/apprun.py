@@ -1187,7 +1187,9 @@ flags 가 있으면 해당 작업을 수행하고 종료합니다.
                                   type  : [필수] simple, oneshot, forking, notify, idle
                                   after : [선택] After= 유닛 (+ 로 구분)
                                   before: [선택] Before= 유닛 (+ 로 구분)
-                                예: --install-as-service=oneshot,network.target,multi-user.target
+                                예: --install-as-service=oneshot,network.target,multi-user.target                                  
+                                --enable: [추가 옵션] 설치 과정에서 자동으로 활성화
+                                --start : [추가 옵션] 설치 과정에서 자동으로 시작 (자동으로 활성화 트리거)
 
     --uninstall-as-service      --install-as-service 로 생성된 서비스를
                                 중지·비활성화·삭제
