@@ -4,15 +4,7 @@
 
 
 lns=(
-    "/usr/local/bin/apprun"
-    "/usr/local/bin/appid"
-    "/usr/local/bin/apprun-prepare"
-    "/usr/local/bin/apprunutil"
-    "/usr/local/bin/dictionary"
     "/usr/bin/apprun"
-    "/usr/bin/appid"
-    "/usr/bin/apprun-prepare"
-    "/usr/bin/apprunutil"
     "/usr/bin/dictionary"
     "/usr/bin/apprun3"
     "/usr/bin/apprun-package"
@@ -24,6 +16,3 @@ for file in "${lns[@]}"; do
         rm -f "${file}"
     fi
 done
-
-systemctl stop apprundropin.service
-systemctl disable apprundropin.service

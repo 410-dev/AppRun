@@ -29,12 +29,8 @@ fi
 
 # files
 orig_files_map_to=(
-    "appid"
     "apprun"
-    "apprun-legacy"
     "apprun-package"
-    "apprun-prepare"
-    "apprunutil"
     "apprunx-thumbnailer"
     "dictionary"
 )
@@ -55,10 +51,6 @@ done
 # Backward compatibility for 3.0~3.2pre1
 ln -fs "/usr/bin/apprun" "/usr/bin/apprun3"
 ln -fs "/usr/bin/apprun-package" "/usr/bin/apprun3-package"
-
-
-/usr/bin/apprun-prepare.sh "/usr/lib/AppRun/apprundropin.apprun"
-systemctl enable --now /usr/lib/AppRun/apprundropin.apprun/apprundropin.service
 
 /usr/bin/apprun3 --install-as-service=simple,graphical.target+systemd-user-sessions.service /usr/lib/AppRun/AppRunDropInService.apprunx
 
