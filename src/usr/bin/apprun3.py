@@ -91,23 +91,31 @@ def handle_extract_file(apprunx: str, inner_path: str, dest: str) -> int:
 # Prepare 핸들러
 # ==============================================================================
 
-def handle_prepare(apprunx: str, mount_path: Path, register: bool) -> int:
+def handle_prepare(apprunx: str, mount_path: Path, register: bool, unmount: bool = True) -> int:
     if not libapprun.is_squashfs(apprunx):
         print("Error: --prepare 는 Format 3 (.apprunx) 만 지원합니다.", file=sys.stderr)
         print("Format 1/2 는 apprun-prepare 를 사용하세요.", file=sys.stderr)
         return 1
 
     app_id = libapprun.get_bundle_id(apprunx)
-    print(app_id)
     box    = libapprun.ensure_box(app_id)
 
     mount_path.mkdir(parents=True, exist_ok=True)
+
+    def termination_unmount(mnt: str):
+        if unmount:
+            try:
+                libapprun.unmount(mnt)
+            except Exception as ex:
+                print(f"Warning: 마운트 해제 실패: {ex}", file=sys.stderr)
+
 
     if not libapprun.is_mounted(str(mount_path)):
         try:
             libapprun.mount(apprunx, str(mount_path))
         except RuntimeError as e:
             print(f"Error: 마운트 실패: {e}", file=sys.stderr)
+            termination_unmount(str(mount_path))
             return 1
 
     bundle = str(mount_path)
@@ -115,6 +123,7 @@ def handle_prepare(apprunx: str, mount_path: Path, register: bool) -> int:
     if not _validate_entry(bundle):
         libapprun.notify("[AppRun] 준비 실패", f"entry point 없음: {app_id}")
         print("Error: 실행 가능한 entry point 없음", file=sys.stderr)
+        termination_unmount(str(mount_path))
         return 9
 
     if (Path(bundle) / "main.py").exists():
@@ -122,11 +131,13 @@ def handle_prepare(apprunx: str, mount_path: Path, register: bool) -> int:
         if result != 0:
             # venv 삭제
             shutil.rmtree(box / "pyvenv", ignore_errors=True)
+            termination_unmount(str(mount_path))
             return result
 
     if register:
         _register_desktop(bundle, app_id)
 
+    termination_unmount(str(mount_path))
     return 0
 
 
@@ -437,6 +448,7 @@ def handle_run(apprunx: str, extra_args: list[str]) -> int:
         except Exception as e:
             libapprun.show_gui_alert("AppRun 오류", f"기존 이미지 언마운트 실패: {e}", "error")
             return 1
+
     try:
         libapprun.mount(apprunx, str(mount_path))
     except RuntimeError as e:
@@ -445,7 +457,7 @@ def handle_run(apprunx: str, extra_args: list[str]) -> int:
 
     bundle = str(mount_path)
 
-    prepare_code = handle_prepare(apprunx, mount_path, register=False)
+    prepare_code = handle_prepare(apprunx, mount_path, register=False, unmount=False)
     if prepare_code != 0:
         return prepare_code
 
@@ -456,6 +468,11 @@ def handle_run(apprunx: str, extra_args: list[str]) -> int:
         print(f"Error: entry point 없음: {bundle}", file=sys.stderr)
         return 10
 
+    executable, argv = cmd
+
+    # _wrap_* 함수들도 tuple을 받도록 수정하거나, 여기서 합쳐서 넘기기
+    cmd = argv  # wrap 함수들이 리스트를 다룬다면 그대로 유지
+
     cmd = _wrap_root(cmd, meta)
     cmd = _wrap_terminal(cmd, meta)
     cmd = _wrap_screen(cmd, meta, app_id)
@@ -463,11 +480,15 @@ def handle_run(apprunx: str, extra_args: list[str]) -> int:
     start  = time.time()
     result = None
     try:
-        result = subprocess.run(cmd + extra_args)
+        result = subprocess.run(cmd + extra_args, executable=executable)
+    except KeyboardInterrupt as e:
+        # 사용자가 Ctrl+C 로 실행을 중단한 경우, 프로세스가 아직 시작되지 않았을 수 있음
+        print("실행이 취소되었습니다.", file=sys.stderr)
     finally:
         try:
             libapprun.unmount(str(mount_path))
-        except Exception:
+        except Exception as e:
+            print(f"마운트 해제 실패: {e}", file=sys.stderr)
             pass
 
     duration = time.time() - start
@@ -479,33 +500,39 @@ def handle_run(apprunx: str, extra_args: list[str]) -> int:
     _detect_crash(meta, result.returncode, duration)
     return result.returncode
 
-def _build_cmd(bundle: str, app_id: str, meta: dict) -> list[str] | None:
+def _get_proc_title(app_id: str, meta: dict) -> str:
+    if meta.get("name"):
+        name = meta["name"].replace(" ", "")
+        return re.sub(r'[^a-zA-Z0-9._-]', '_', name)
+    return app_id.replace(" ", "-")
+
+def _build_cmd(bundle: str, app_id: str, meta: dict) -> tuple[str, list[str]] | None:
+    """
+    Returns (executable_path, argv) where argv[0] is the process title.
+    """
     b = Path(bundle)
+    proc_title = _get_proc_title(app_id, meta)  # 이름 문자열만 반환
 
-    # meta.json 의 entry_point 우선
-    entry_point = meta.get("entry_point", "").strip()
-    if entry_point:
-        return entry_point.replace("{APPDIR}", bundle).split()
+    if entry_point := meta.get("entry_point", "").strip():
+        parts = entry_point.replace("{APPDIR}", bundle).split()
+        return (parts[0], [proc_title] + parts[1:])
 
-    # fallback: main.* 파일 기반
     if (b / "main.py").exists():
         _setup_pythonpath(bundle)
-        venv_py = libapprun.get_box_path(app_id) / "pyvenv" / "bin" / "python3"
-        return [str(venv_py), str(b / "main.py")]
+        venv_py = str(libapprun.get_box_path(app_id) / "pyvenv" / "bin" / "python3")
+        return (venv_py, [proc_title, str(b / "main.py")])
 
     if (b / "main.jar").exists():
-        return ["java", "-jar", str(b / "main.jar")]
+        return ("java", [proc_title, "-jar", str(b / "main.jar")])
 
     if (b / "main.sh").exists():
-        return ["bash", str(b / "main.sh")]
+        return ("bash", [proc_title, str(b / "main.sh")])
 
-    main_bin = b / "main"
-    if main_bin.exists() and os.access(main_bin, os.X_OK):
-        return [str(main_bin)]
+    main_bin = str(b / "main")
+    if os.access(main_bin, os.X_OK):
+        return (main_bin, [proc_title])
 
     return None
-
-
 def _setup_pythonpath(bundle: str) -> None:
     libs_file = None
     for candidate in ["AppRunMeta/libs", "libs"]:

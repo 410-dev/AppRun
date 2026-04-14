@@ -34,7 +34,7 @@ shift # Remove bundle path from args, leaving only application arguments
 # Check format 3
 if [[ "$(python3 /usr/bin/apprun3.py --is-format3 "$BUNDLE_PATH")" == "true" ]]; then
     # Pass handling to apprun3
-    python3 /usr/bin/apprun3.py --prepare "$BUNDLE_PATH"
+#    python3 /usr/bin/apprun3.py --prepare "$BUNDLE_PATH"
     # Launch apprun3
     python3 /usr/bin/apprun3.py "$BUNDLE_PATH" "$@"
     exit $?
