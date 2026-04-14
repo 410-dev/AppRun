@@ -431,8 +431,15 @@ def _get_mountpath(apprunx: str) -> tuple[str, Path]:
     return app_id, mount_path
 
 
+import tempfile
+
+# 심볼릭 링크 임시 디렉토리를 추적하기 위한 변수
+_tmp_symlink_dir: str | None = None
+
 def handle_run(apprunx: str, extra_args: list[str]) -> int:
     app_id, mount_path = _get_mountpath(apprunx)
+    global _tmp_symlink_dir
+    _tmp_symlink_dir = None  # 초기화
 
     # 필수 패키지 확인 및 설치
     if not ensure_base_packages(apprunx):
@@ -468,11 +475,6 @@ def handle_run(apprunx: str, extra_args: list[str]) -> int:
         print(f"Error: entry point 없음: {bundle}", file=sys.stderr)
         return 10
 
-    executable, argv = cmd
-
-    # _wrap_* 함수들도 tuple을 받도록 수정하거나, 여기서 합쳐서 넘기기
-    cmd = argv  # wrap 함수들이 리스트를 다룬다면 그대로 유지
-
     cmd = _wrap_root(cmd, meta)
     cmd = _wrap_terminal(cmd, meta)
     cmd = _wrap_screen(cmd, meta, app_id)
@@ -480,7 +482,7 @@ def handle_run(apprunx: str, extra_args: list[str]) -> int:
     start  = time.time()
     result = None
     try:
-        result = subprocess.run(cmd + extra_args, executable=executable)
+        result = subprocess.run(cmd + extra_args)
     except KeyboardInterrupt as e:
         # 사용자가 Ctrl+C 로 실행을 중단한 경우, 프로세스가 아직 시작되지 않았을 수 있음
         print("실행이 취소되었습니다.", file=sys.stderr)
@@ -490,6 +492,14 @@ def handle_run(apprunx: str, extra_args: list[str]) -> int:
         except Exception as e:
             print(f"마운트 해제 실패: {e}", file=sys.stderr)
             pass
+
+        # 심볼릭 링크 정리
+        if _tmp_symlink_dir is not None and _tmp_symlink_dir and os.path.isdir(_tmp_symlink_dir):
+            try:
+                shutil.rmtree(_tmp_symlink_dir)
+            except Exception:
+                pass
+            _tmp_symlink_dir = None
 
     duration = time.time() - start
 
@@ -504,35 +514,50 @@ def _get_proc_title(app_id: str, meta: dict) -> str:
     if meta.get("name"):
         name = meta["name"].replace(" ", "")
         return re.sub(r'[^a-zA-Z0-9._-]', '_', name)
-    return app_id.replace(" ", "-")
+    return app_id.split(".")[-1].replace(" ", "-")
 
-def _build_cmd(bundle: str, app_id: str, meta: dict) -> tuple[str, list[str]] | None:
-    """
-    Returns (executable_path, argv) where argv[0] is the process title.
-    """
+
+def _build_cmd(bundle: str, app_id: str, meta: dict) -> list[str] | None:
+    global _tmp_symlink_dir
+
     b = Path(bundle)
     proc_title = _get_proc_title(app_id, meta)  # 이름 문자열만 반환
 
-    if entry_point := meta.get("entry_point", "").strip():
+    def make_symlink(executable: str) -> str:
+        """실행 파일에 대한 심볼릭 링크를 proc_title 이름으로 생성"""
+        global _tmp_symlink_dir
+        _tmp_symlink_dir = tempfile.mkdtemp(prefix="apprun_")
+        fake_bin = os.path.join(_tmp_symlink_dir, proc_title[:15])
+        os.symlink(executable, fake_bin)
+        return fake_bin
+
+    entry_point = meta.get("entry_point", "").strip()
+    if entry_point:
         parts = entry_point.replace("{APPDIR}", bundle).split()
-        return (parts[0], [proc_title] + parts[1:])
+        linked = make_symlink(parts[0])
+        return [linked] + parts[1:]
 
     if (b / "main.py").exists():
         _setup_pythonpath(bundle)
         venv_py = str(libapprun.get_box_path(app_id) / "pyvenv" / "bin" / "python3")
-        return (venv_py, [proc_title, str(b / "main.py")])
+        linked = make_symlink(venv_py)
+        return [linked, str(b / "main.py")]
 
     if (b / "main.jar").exists():
-        return ("java", [proc_title, "-jar", str(b / "main.jar")])
+        linked = make_symlink("/usr/bin/java")
+        return [linked, "-jar", str(b / "main.jar")]
 
     if (b / "main.sh").exists():
-        return ("bash", [proc_title, str(b / "main.sh")])
+        linked = make_symlink("/bin/bash")
+        return [linked, str(b / "main.sh")]
 
     main_bin = str(b / "main")
     if os.access(main_bin, os.X_OK):
-        return (main_bin, [proc_title])
+        linked = make_symlink(main_bin)
+        return [linked]
 
     return None
+
 def _setup_pythonpath(bundle: str) -> None:
     libs_file = None
     for candidate in ["AppRunMeta/libs", "libs"]:
