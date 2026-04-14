@@ -11,6 +11,15 @@ class AppContext:
         import sys
         self._interpreter_path = sys.executable
 
+        # 만약 인터프리터의 위치가 /tmp 로 시작한다면, 심볼릭 링크를 한단계 찾음
+        if self._interpreter_path.startswith('/tmp'):
+            try:
+                real_path = os.readlink(self._interpreter_path)
+                if real_path != self._interpreter_path:
+                    self._interpreter_path = real_path
+            except Exception:
+                pass  # 실패해도 원래 경로 유지
+
         # 컨텍스트 기본 설정
         self.unreadable_filename: bool = False  # 앱박스 내에 파일을 쓰기 할 때, 파일 명을 다이제스트 함
         self._xmem: dict = {
@@ -41,7 +50,21 @@ class AppContext:
         # 엔트리 스크립트 및 번들 경로 계산
         self._entry_script_path = self._detect_entry_script()
         self._bundle_path = self._compute_bundle_path(self._entry_script_path)
+        self._mount_point = self._bundle_path[0:-1] # Format 3 전용 필드, 마운트된 경우 마운트 지점 경로
         self._pid = os.getpid()
+
+        # 만약 box/.run/<bundle_path sha256 digested> 파일이 있다면, 현재 Format 3 일 가능성이 높음
+        # 해당 파일에 실제 번들 위치가 저장되어 있으니 그걸 읽어옴
+        possible_format3_marker = os.path.join(self._apprun_box_path, ".run", hashlib.sha256(self._mount_point.encode()).hexdigest())
+        if os.path.isfile(possible_format3_marker):
+            try:
+                with open(possible_format3_marker, 'r') as f:
+                    format3_bundle_path = f.read().strip()
+                    if os.path.isfile(format3_bundle_path):
+                        self._bundle_path = format3_bundle_path  # 번들 경로 업데이트
+
+            except Exception:
+                pass  # 실패해도 기존 경로 유지
 
     # ---------- 내부 유틸 ----------
 
@@ -149,6 +172,13 @@ class AppContext:
         번들 경로는 '첫 엔트리 스크립트'의 부모 디렉터리로 정의됨.
         """
         return self._bundle_path
+
+    def mount_point(self) -> str:
+        """
+        Format 3 번들이 마운트된 경로를 반환.
+        Format 3이 아닌 경우, bundle()과 동일한 값을 반환.
+        """
+        return self._mount_point
 
     def entry_script(self) -> str:
         """
@@ -523,12 +553,120 @@ class AppContext:
     def xmem_get(self, key: str, default=None):
         return self._xmem.get(key, default)
 
+    def uninstall_service(self, user: str = None):
+        """AppRun 번들을 시스템 서비스에서 제거하는 헬퍼.
+        명령 실행 방법
+        apprun3 --user=user --uninstall-as-service <번들 파일>
+        """
+
+        import subprocess
+        import sys
+        import shutil
+
+        username: str = self.username() if user is None else user
+
+        cmd = ["apprun3", "--uninstall-as-service", f"--user={username}", self._bundle_path]
+
+        try:
+            result = subprocess.run(cmd, check=True, capture_output=True, text=True)
+            print("Service uninstalled successfully.")
+            if shutil.which("notify-send"):
+                subprocess.run(["notify-send", "시동 애플리케이션 등록 해제", f"{self.id()} 서비스가 시스템 시작에서 해제됐습니다."])
+            print(result.stdout)
+        except subprocess.CalledProcessError as e:
+            print("Failed to uninstall service.", file=sys.stderr)
+            print(e.stderr, file=sys.stderr)
+
+
+    def install_as_service(self, svc_type: str, user: str = None, after: list[str] = None, before: list[str] = None, no_interaction: bool = False) -> bool:
+        """AppRun 번들을 시스템 서비스로 설치하는 헬퍼.
+        명령 실행 방법
+        # apprun3 --install-as-service=<type>,<after>+<after>+<after>....,<before>+<before>+<before>....
+        # 예:
+        # apprun3 --install-as-service=oneshot,plymouth-quit-wait.service+systemd-user-sessions.service,network.target
+        """
+        import subprocess
+        import sys
+        import shutil
+
+        # 현재 사용자 홈 디렉터리와 사용자 이름 가져오기
+        username: str = self.username() if user is None else user
+        userhome: str = self.userhome()
+
+        # GUI 가 있으면 Zenity 를 통해 팝업으로 물어보고, GUI 가 없으면 팝업 없이 터미널에서 물어봄
+        if not no_interaction:
+            if shutil.which("zenity"):
+                try:
+                    subprocess.run([
+                        "zenity", "--question",
+                        "--title=서비스 설치 확인",
+                        f"--text={self.id()} 서비스를 시스템 시작 시 자동으로 실행되도록 등록하시겠습니까?"
+                    ], check=True)
+                except subprocess.CalledProcessError:
+                    print("Service installation cancelled by user.")
+                    return False
+            else:
+                response = input(f"Do you want to register {self.id()} as a service that runs on system startup? (y/N): ")
+                if response.strip().lower() != 'y':
+                    print("Service installation cancelled by user.")
+                    return False
+
+        # $home/.local/apprun/services/ 디렉터리에 번들 복사
+        services_dir = os.path.join(userhome, ".local", "apprun", "services")
+        os.makedirs(services_dir, exist_ok=True)
+        service_bundle_path = os.path.join(services_dir, os.path.basename(self._bundle_path))
+        print(f"Copying {self._bundle_path} ----->>>> {service_bundle_path}")
+
+        # Format 1, 2
+        if os.path.isdir(self._bundle_path):
+            shutil.copytree(self._bundle_path, service_bundle_path, dirs_exist_ok=True)
+
+        # Format 3
+        elif os.path.isfile(self._bundle_path):
+            shutil.copy2(self._bundle_path, service_bundle_path)
+
+        # Not found
+        else:
+            print(f"Error: Bundle path '{self._bundle_path}' does not exist.", file=sys.stderr)
+            return False
+
+        if svc_type not in ('oneshot', 'simple', 'forking', 'notify'):
+            raise ValueError(f"Unsupported service type: {svc_type}")
+
+        after_deps = after or []
+        before_deps = before or []
+
+        # 명령어
+        print(f"Installing service for user '{username}' with type '{svc_type}'...")
+        cmd = ["apprun3", f"--install-as-service={svc_type},{'+'.join(after_deps)},{'+'.join(before_deps)}", f"--user={username}", service_bundle_path]
+
+        # 실행
+        try:
+            result = subprocess.run(cmd, check=True, capture_output=True, text=True)
+        except subprocess.CalledProcessError as e:
+            print("Failed to install service.", file=sys.stderr)
+            print(e.stderr, file=sys.stderr)
+            return False
+
+        try:
+            if shutil.which("notify-send"):
+                subprocess.run(["notify-send", "시동 애플리케이션 등록됨", f"{self.id()} 서비스가 시스템 시작 / 사용자 로그인 시 실행됩니다."])
+
+        except:
+            pass
+
+        print("Service installed successfully.")
+        print(result.stdout)
+        return True
+
+
     def __str__(self):
         return (
             "AppContext("
             f"interpreter_path={self._interpreter_path}, "
             f"apprun_box_path={self._apprun_box_path}, "
             f"bundle_path={self._bundle_path}, "
+            f"mount_point={self._mount_point}, "
             f"entry_script={self._entry_script_path}, "
             f"bundle_id={self._bundle_id}"
             ")"
