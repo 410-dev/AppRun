@@ -61,6 +61,6 @@ sudo ./src/DEBIAN/postinst
 [AppRun 3.1 이상 번들 관련](docs/format-3.md)
 
 ### Format 1, 2 번들 관련
-[번들 만들기](docs/Making-Bundle.md)
+[번들 만들기](docs/archived/Making-Bundle.md)
 
 [Collection ID](docs/Collection-ID.md)

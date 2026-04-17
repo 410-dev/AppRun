@@ -22,6 +22,9 @@ AppRun 의 스토리지입니다.
 ## ~/.local/apprun/boxes
 AppRun 이 실행한 AppRun 번들의 독립된 공간입니다.
 
+## ~/.local/apprun/mounts/\<id>
+AppRun 이 AppRun 번들을 실행할 때, 번들 이미지를 마운트하는 공간입니다.
+
 ## ~/.local/apprun/boxes/\<id>
 AppRun 번들이 권장 정책에 따라 임의로 파일을 작성할 수 있는 공간입니다.
 

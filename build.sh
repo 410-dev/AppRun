@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # If no argument, make deb file from src
-if [ -z "$1" ]; then
+if [ -z "$1" ] || [ "$1" == "nogui" ]; then
 
     # Package src/usr/lib/AppRun/apprundropinf3.apprunxproj
     if [[ ! -z "$(which apprun3-package)" ]]; then
@@ -19,7 +19,11 @@ if [ -z "$1" ]; then
     sudo chown -R $USER:$USER src
     sudo chmod -R 755 src
     sudo chown $USER src.deb
-    mv src.deb apprun.deb
+    if [[ "$1" == "nogui" ]]; then
+        mv src.deb apprun-nogui.deb
+    else
+        mv src.deb apprun.deb
+    fi
 fi
 
 exit 0

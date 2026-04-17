@@ -50,11 +50,10 @@ class AppContext:
         # 엔트리 스크립트 및 번들 경로 계산
         self._entry_script_path = self._detect_entry_script()
         self._bundle_path = self._compute_bundle_path(self._entry_script_path)
-        self._mount_point = self._bundle_path[0:-1] # Format 3 전용 필드, 마운트된 경우 마운트 지점 경로
+        self._mount_point = self._bundle_path[0:-1]
         self._pid = os.getpid()
 
-        # 만약 box/.run/<bundle_path sha256 digested> 파일이 있다면, 현재 Format 3 일 가능성이 높음
-        # 해당 파일에 실제 번들 위치가 저장되어 있으니 그걸 읽어옴
+        # 만약 box/.run/<bundle_path sha256 digested> 파일이 있다면, 해당 파일에 실제 번들 위치가 저장되어 있으니 그걸 읽어옴
         possible_format3_marker = os.path.join(self._apprun_box_path, ".run", hashlib.sha256(self._mount_point.encode()).hexdigest())
         if os.path.isfile(possible_format3_marker):
             try:
@@ -556,7 +555,7 @@ class AppContext:
     def uninstall_service(self, user: str = None):
         """AppRun 번들을 시스템 서비스에서 제거하는 헬퍼.
         명령 실행 방법
-        apprun3 --user=user --uninstall-as-service <번들 파일>
+        apprun --user=user --uninstall-as-service <번들 파일>
         """
 
         import subprocess
@@ -565,7 +564,7 @@ class AppContext:
 
         username: str = self.username() if user is None else user
 
-        cmd = ["apprun3", "--uninstall-as-service", f"--user={username}", self._bundle_path]
+        cmd = ["apprun", "--uninstall-as-service", f"--user={username}", self._bundle_path]
 
         try:
             result = subprocess.run(cmd, check=True, capture_output=True, text=True)
@@ -581,9 +580,9 @@ class AppContext:
     def install_as_service(self, svc_type: str, user: str = None, after: list[str] = None, before: list[str] = None, no_interaction: bool = False) -> bool:
         """AppRun 번들을 시스템 서비스로 설치하는 헬퍼.
         명령 실행 방법
-        # apprun3 --install-as-service=<type>,<after>+<after>+<after>....,<before>+<before>+<before>....
+        # apprun --install-as-service=<type>,<after>+<after>+<after>....,<before>+<before>+<before>....
         # 예:
-        # apprun3 --install-as-service=oneshot,plymouth-quit-wait.service+systemd-user-sessions.service,network.target
+        # apprun --install-as-service=oneshot,plymouth-quit-wait.service+systemd-user-sessions.service,network.target
         """
         import subprocess
         import sys
@@ -638,7 +637,7 @@ class AppContext:
 
         # 명령어
         print(f"Installing service for user '{username}' with type '{svc_type}'...")
-        cmd = ["apprun3", f"--install-as-service={svc_type},{'+'.join(after_deps)},{'+'.join(before_deps)}", f"--user={username}", service_bundle_path]
+        cmd = ["apprun", f"--install-as-service={svc_type},{'+'.join(after_deps)},{'+'.join(before_deps)}", f"--user={username}", service_bundle_path]
 
         # 실행
         try:
