@@ -57,10 +57,6 @@ sudo ./src/DEBIAN/postinst
 ## Documentation
 [파일 위치](docs/Paths.md)
 
-### Format 3 번들 관련
-[AppRun 3.1 이상 번들 관련](docs/format-3.md)
-
-### Format 1, 2 번들 관련
-[번들 만들기](docs/archived/Making-Bundle.md)
+[번들에 관하여](docs/format-3.md)
 
 [Collection ID](docs/Collection-ID.md)
