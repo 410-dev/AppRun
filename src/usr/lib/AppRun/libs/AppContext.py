@@ -2,6 +2,22 @@
 
 import os
 import hashlib
+import sys
+import fcntl
+import atexit
+import signal
+from pathlib import Path
+import tempfile
+
+
+class ProcessAlreadyRunningError(Exception):
+    """동일한 id로 이미 프로세스가 실행 중일 때 발생"""
+    def __init__(self, lock_id: str, existing_pid: int):
+        self.lock_id = lock_id
+        self.existing_pid = existing_pid
+        super().__init__(
+            f"Process '{lock_id}' is already running (PID: {existing_pid})"
+        )
 
 
 class AppContext:
@@ -64,6 +80,9 @@ class AppContext:
 
             except Exception:
                 pass  # 실패해도 기존 경로 유지
+
+        self._lock_fd = None
+        self._lock_path = None
 
     # ---------- 내부 유틸 ----------
 
@@ -147,6 +166,53 @@ class AppContext:
                     yield entry_path, False
 
         yield from helper(self._apprun_box_path, 0)
+
+    # ------------------------------------------------------------------ #
+
+    def _release_lock(self):
+        if self._lock_fd is not None:
+            try:
+                fcntl.flock(self._lock_fd, fcntl.LOCK_UN)
+                self._lock_fd.close()
+            except OSError:
+                pass
+            self._lock_fd = None
+
+        if self._lock_path is not None:
+            try:
+                self._lock_path.unlink(missing_ok=True)
+            except OSError:
+                pass
+            self._lock_path = None
+
+    def _handle_signal(self, sig, frame):
+        self._release_lock()
+        sys.exit(0)
+
+    @staticmethod
+    def _get_lock_path(lock_id: str, globally: bool) -> Path:
+        safe_id = lock_id.replace("/", "_").replace(" ", "_")
+        filename = f"{safe_id}.lock"
+
+        if globally:
+            # 시스템 전체 공유 → /tmp (누구나 읽기 가능)
+            return Path(tempfile.gettempdir()) / filename
+        else:
+            # 유저 전용 → XDG_RUNTIME_DIR 우선, 없으면 ~/.local/run
+            runtime_dir = os.environ.get("XDG_RUNTIME_DIR")
+            if runtime_dir:
+                return Path(runtime_dir) / filename
+            return Path.home() / ".local" / "run" / filename
+
+    @staticmethod
+    def _is_process_alive(pid: int) -> bool:
+        try:
+            os.kill(pid, 0)  # 시그널 0 = 존재 여부만 확인
+            return True
+        except ProcessLookupError:
+            return False
+        except PermissionError:
+            return True  # 권한 없어도 프로세스는 살아있음
 
     # ---------- 공개 API ----------
 
@@ -551,6 +617,66 @@ class AppContext:
 
     def xmem_get(self, key: str, default=None):
         return self._xmem.get(key, default)
+
+    def ensure_privileged(self, throw_error_instead_of_exit: bool = False, exit_code: int = 1):
+        # 현재 프로세스가 root 권한으로 실행 중인지 확인
+        if os.geteuid() != 0:
+            if throw_error_instead_of_exit:
+                raise PermissionError("This operation requires elevated privileges (root).")
+            else:
+                print("This operation requires elevated privileges (root). Exiting.")
+                sys.exit(exit_code)
+
+    def ensure_single_process_globally(self):
+        self._ensure_single_process(lock_id=self.id(), globally=True)
+
+    def ensure_single_process_user(self):
+        self._ensure_single_process(lock_id=self.id(), globally=False)
+
+    def _ensure_single_process(self, lock_id: str, globally: bool):
+        """
+        동일한 lock_id로 실행 중인 프로세스가 있으면 예외를 발생시킵니다.
+
+        :param lock_id:   식별자 (예: 앱 이름, 스크립트 이름)
+        :param globally:  True  → 시스템 전체 (모든 유저 공유, /tmp)
+                          False → 현재 유저 전용 (~/.local/run 등)
+        """
+        lock_path = self._get_lock_path(lock_id, globally)
+        lock_path.parent.mkdir(parents=True, exist_ok=True)
+
+        fd = open(lock_path, "a+")
+
+        try:
+            # Non-blocking exclusive lock 시도
+            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            # 락 획득 실패 → 파일에서 PID 읽기
+            fd.seek(0)
+            raw = fd.read().strip()
+            existing_pid = int(raw) if raw.isdigit() else -1
+            fd.close()
+
+            # stale lock 검사: PID가 실제로 살아있는지 확인
+            if existing_pid > 0 and not self._is_process_alive(existing_pid):
+                # stale lock → 파일 제거 후 재시도
+                lock_path.unlink(missing_ok=True)
+                return self.ensure_single_process(lock_id, globally)
+
+            raise ProcessAlreadyRunningError(lock_id, existing_pid)
+
+        # 락 획득 성공 → PID 기록
+        fd.seek(0)
+        fd.truncate()
+        fd.write(str(os.getpid()))
+        fd.flush()
+
+        self._lock_fd = fd
+        self._lock_path = lock_path
+
+        # 프로세스 종료 시 자동 정리 등록
+        atexit.register(self._release_lock)
+        signal.signal(signal.SIGTERM, self._handle_signal)
+        signal.signal(signal.SIGINT, self._handle_signal)
 
     def uninstall_service(self, user: str = None):
         """AppRun 번들을 시스템 서비스에서 제거하는 헬퍼.
