@@ -44,8 +44,20 @@ def get_real_user() -> str:
 
 
 def _has_gui() -> bool:
-    """DISPLAY 또는 WAYLAND_DISPLAY 가 설정돼 있으면 GUI 환경으로 판단."""
-    return bool(os.environ.get("DISPLAY") or os.environ.get("WAYLAND_DISPLAY"))
+    """
+    실제 사용자 GUI 세션을 안전하게 사용할 수 있을 때만 True.
+
+    sudo frameworkctl -> apprun3 처럼 sudo 로 들어온 root 컨텍스트에서는
+    DISPLAY/WAYLAND_DISPLAY 가 남아 있어도 root 가 사용자 session bus 의 주인이 아니므로
+    GUI 터미널/알림/pkexec 경로를 타지 않도록 headless 로 취급한다.
+    """
+    if not (os.environ.get("DISPLAY") or os.environ.get("WAYLAND_DISPLAY")):
+        return False
+
+    if os.geteuid() == 0 and os.environ.get("SUDO_USER"):
+        return False
+
+    return True
 
 
 def _pkexec_available() -> bool:
@@ -63,6 +75,7 @@ def _sudo_cmd() -> list[str]:
     if _has_gui() and _pkexec_available():
         return ["pkexec"]
     return ["sudo"]
+
 
 def _is_tty_context() -> bool:
     """sudo 비밀번호 프롬프트를 받을 수 있는 대화형 터미널인지 확인."""
