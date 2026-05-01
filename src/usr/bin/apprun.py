@@ -268,7 +268,7 @@ def _prepare_python(bundle: str, app_id: str, box: Path) -> int:
 
 def _find_terminal() -> list[str] | None:
     """
-    사용 가능한 터미널 에뮬레이터를 찾아 반환.
+    사용 가능한 터미널 에뮬레이터를 찾아 반환
     반환 형식: [실행파일, <명령 실행 플래그>]
     """
     candidates = [
