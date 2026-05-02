@@ -44,20 +44,8 @@ def get_real_user() -> str:
 
 
 def _has_gui() -> bool:
-    """
-    실제 사용자 GUI 세션을 안전하게 사용할 수 있을 때만 True.
-
-    sudo frameworkctl -> apprun3 처럼 sudo 로 들어온 root 컨텍스트에서는
-    DISPLAY/WAYLAND_DISPLAY 가 남아 있어도 root 가 사용자 session bus 의 주인이 아니므로
-    GUI 터미널/알림/pkexec 경로를 타지 않도록 headless 로 취급한다.
-    """
-    if not (os.environ.get("DISPLAY") or os.environ.get("WAYLAND_DISPLAY")):
-        return False
-
-    if os.geteuid() == 0 and os.environ.get("SUDO_USER"):
-        return False
-
-    return True
+    """DISPLAY 또는 WAYLAND_DISPLAY 가 설정돼 있으면 GUI 환경으로 판단."""
+    return bool(os.environ.get("DISPLAY") or os.environ.get("WAYLAND_DISPLAY"))
 
 
 def _pkexec_available() -> bool:
@@ -75,76 +63,6 @@ def _sudo_cmd() -> list[str]:
     if _has_gui() and _pkexec_available():
         return ["pkexec"]
     return ["sudo"]
-
-
-
-def _is_tty_context() -> bool:
-    """sudo 비밀번호 프롬프트를 받을 수 있는 대화형 터미널인지 확인."""
-    return sys.stdin.isatty() and sys.stderr.isatty()
-
-
-# ==============================================================================
-# Sudo/Root Context Helpers
-# ==============================================================================
-
-def _sudo_invoking_user_info() -> tuple[str, pwd.struct_passwd] | None:
-    """sudo 로 들어온 root 컨텍스트라면 원래 로그인 사용자 정보를 반환."""
-    if os.geteuid() != 0:
-        return None
-
-    sudo_user = os.environ.get("SUDO_USER")
-    if not sudo_user or sudo_user == "root":
-        return None
-
-    try:
-        return sudo_user, pwd.getpwnam(sudo_user)
-    except KeyError:
-        return None
-
-
-
-
-def _gui_terminal_cmd(terminal: list[str]) -> list[str]:
-    """
-    GUI 터미널은 root 가 아니라 실제 로그인 사용자 세션에서 실행한다.
-
-    이 함수는 root GUI 세션 보정용 fallback 이며, sudo 로 들어온 root 컨텍스트는
-    _has_gui() 에서 headless 로 처리되어 일반적으로 이 경로를 타지 않는다.
-    """
-    if os.geteuid() != 0:
-        return terminal
-
-    user_info = _sudo_invoking_user_info()
-    if user_info is None:
-        return terminal
-
-    sudo_user, pw = user_info
-    sudo_uid = os.environ.get("SUDO_UID")
-
-    try:
-        uid = int(sudo_uid) if sudo_uid else pw.pw_uid
-    except ValueError:
-        return terminal
-
-    env_args: list[str] = [
-        "env",
-        f"HOME={pw.pw_dir}",
-        f"USER={sudo_user}",
-        f"LOGNAME={sudo_user}",
-        f"PWD={pw.pw_dir}",
-        f"XDG_RUNTIME_DIR=/run/user/{uid}",
-    ]
-
-    bus_path = Path(f"/run/user/{uid}/bus")
-    if bus_path.exists():
-        env_args.append(f"DBUS_SESSION_BUS_ADDRESS=unix:path={bus_path}")
-
-    if os.environ.get("DISPLAY"):
-        env_args.append(f"DISPLAY={os.environ['DISPLAY']}")
-    if os.environ.get("WAYLAND_DISPLAY"):
-        env_args.append(f"WAYLAND_DISPLAY={os.environ['WAYLAND_DISPLAY']}")
-
-    return ["sudo", "-u", sudo_user, *env_args, *terminal]
 
 
 def _can_escalate() -> bool:
@@ -165,18 +83,13 @@ def handle_id(apprunx: str) -> int:
     return 0
 
 
-def handle_is_format3(apprunx: str) -> int:
-    print("true" if libapprun.is_squashfs(apprunx) else "false")
-    return 0
-
-
 def handle_info(apprunx: str, keys: list[str] | None = None) -> int:
     app_id = libapprun.get_bundle_id(apprunx)
-    fmt    = libapprun.get_bundle_format(apprunx)
     meta   = libapprun.get_bundle_meta(apprunx)
 
-    all_info = {"id": app_id, "format": str(int(fmt)), **meta}
-
+    all_info = {"id": app_id, "format": "3"}
+    all_info.update(meta)
+    
     if keys:
         for key in keys:
             print(f"{key}: {all_info.get(key, '')}")
@@ -208,10 +121,6 @@ def handle_extract_file(apprunx: str, inner_path: str, dest: str) -> int:
 # ==============================================================================
 
 def handle_prepare(apprunx: str, mount_path: Path, register: bool, unmount: bool = True) -> int:
-    if not libapprun.is_squashfs(apprunx):
-        print("Error: --prepare 는 Format 3 (.apprunx) 만 지원합니다.", file=sys.stderr)
-        print("Format 1/2 는 apprun-prepare 를 사용하세요.", file=sys.stderr)
-        return 1
 
     app_id = libapprun.get_bundle_id(apprunx)
     box    = libapprun.ensure_box(app_id)
@@ -268,18 +177,6 @@ def _validate_entry(bundle: str) -> bool:
 
 
 def _run_cmd_gui_term_prefer(gui_cmds: list[str]) -> bool:
-    """
-    GUI 세션에서는 새 터미널 창을 선호하고, headless/sudo-root 컨텍스트에서는
-    현재 세션에서 직접 실행한다.
-
-    sudo frameworkctl -> apprun3 처럼 sudo 로 들어온 root 컨텍스트에서는
-    root GUI 셸이 아니므로 터미널 에뮬레이터를 열지 않는다.
-    """
-    if not _has_gui():
-        print(f"[AppRun] 실행: {shlex.join(gui_cmds)}")
-        proc = subprocess.run(gui_cmds)
-        return proc.returncode == 0
-
     terminal = _find_terminal()
 
     if terminal:
@@ -288,7 +185,7 @@ def _run_cmd_gui_term_prefer(gui_cmds: list[str]) -> bool:
 
         try:
             shell_cmd = (
-                shlex.join(gui_cmds) + "; "
+                " ".join(gui_cmds) + "; "
                 "success=$?; "
                 f"echo $success > {exitcode_file}; "
                 "if [ $success -eq 0 ]; then "
@@ -307,14 +204,14 @@ def _run_cmd_gui_term_prefer(gui_cmds: list[str]) -> bool:
             return actual_code == 0
         finally:
             Path(exitcode_file).unlink(missing_ok=True)
-
-    libapprun.notify(
-        "[AppRun] 의존성 설치중",
-        f"[AppRun] 터미널 에뮬레이터를 찾을 수 없습니다. "
-        f"명령을 백그라운드에서 실행합니다: {shlex.join(gui_cmds)}",
-    )
-    proc = subprocess.run(gui_cmds)
-    return proc.returncode == 0
+    else:
+        libapprun.notify(
+            "[AppRun] 의존성 설치중",
+            f"[AppRun] 터미널 에뮬레이터를 찾을 수 없습니다. "
+            f"명령을 백그라운드에서 실행합니다: {' '.join(gui_cmds)}",
+        )
+        proc = subprocess.run(gui_cmds)
+        return proc.returncode == 0
 
 
 def _prepare_python(bundle: str, app_id: str, box: Path) -> int:
@@ -412,7 +309,7 @@ def _install_packages_cli(pkg_names: list[str], auto: bool = False) -> bool:
         if answer not in ("y", "yes"):
             return False
 
-    apt_cmd = ([] if os.geteuid() == 0 else ["sudo"]) + ["apt-get", "install", "-y"] + pkg_names
+    apt_cmd = ["sudo", "apt-get", "install", "-y"] + pkg_names
     print(f"[AppRun] 실행: {' '.join(apt_cmd)}")
     return subprocess.run(apt_cmd).returncode == 0
 
@@ -655,35 +552,11 @@ def _setup_pythonpath(bundle: str) -> None:
 def _wrap_root(cmd: list[str], meta: dict) -> list[str]:
     if not meta.get("enforce_root_launch", False):
         return cmd
-
-    sudo_prefix = ["sudo", "-E"] if meta.get("keep_environment", False) else ["sudo"]
-
-    if os.geteuid() == 0:
-        return cmd
-
-    # SSH/TTY에서는 sudo 프롬프트를 받을 수 있으므로 sudo가 가장 자연스럽다.
-    if _is_tty_context():
-        return sudo_prefix + cmd
-
-    # GUI 런처처럼 TTY가 없는 환경에서는 sudo가 멈추거나 실패하기 쉽다.
-    # 이 경우 polkit 인증 창을 띄울 수 있는 pkexec를 우선 사용한다.
-    if _has_gui() and _pkexec_available():
-        if meta.get("keep_environment", False):
-            print(
-                "Warning: keep_environment=true 는 pkexec 실행에서는 보존되지 않을 수 있습니다.",
-                file=sys.stderr,
-            )
-        return ["pkexec"] + cmd
-
-    # 마지막 fallback. 보통 여기까지 오면 sudo 프롬프트를 받을 수 없어 실패할 수 있다.
-    return sudo_prefix + cmd
+    return (["sudo", "-E"] if meta.get("keep_environment", False) else ["sudo"]) + cmd
 
 
 def _wrap_terminal(cmd: list[str], meta: dict) -> list[str]:
     if not meta.get("launch_in_terminal", False):
-        return cmd
-
-    if not _has_gui():
         return cmd
 
     terminals = [
@@ -696,20 +569,14 @@ def _wrap_terminal(cmd: list[str], meta: dict) -> list[str]:
     ]
     for term, separator, join_cmd in terminals:
         if shutil.which(term):
-            return _gui_terminal_cmd([term] + separator) + ([shlex.join(cmd)] if join_cmd else cmd)
+            return [term] + separator + ([shlex.join(cmd)] if join_cmd else cmd)
 
-    if _has_gui():
-        libapprun.show_gui_alert(
-            "AppRun 오류",
-            "터미널 에뮬레이터를 찾을 수 없습니다.\n"
-            "ptyxis, alacritty, gnome-terminal, konsole, xfce4-terminal, xterm 중 하나를 설치해주세요.",
-            "error",
-        )
-    else:
-        print(
-            "Error: launch_in_terminal=true 이지만 GUI 터미널 에뮬레이터를 사용할 수 없습니다.",
-            file=sys.stderr,
-        )
+    libapprun.show_gui_alert(
+        "AppRun 오류",
+        "터미널 에뮬레이터를 찾을 수 없습니다.\n"
+        "ptyxis, alacritty, gnome-terminal, konsole, xfce4-terminal, xterm 중 하나를 설치해주세요.",
+        "error",
+    )
     sys.exit(1)
 
 
@@ -931,7 +798,7 @@ def _ensure_linger(username: str) -> bool:
 
     print(f"  linger 활성화 중 ({username})...", file=sys.stderr)
 
-    cmd = _sudo_cmd() + ["loginctl", "enable-linger", username]
+    cmd = ([] if os.geteuid() == 0 else ["sudo"]) + ["loginctl", "enable-linger", username]
     proc = subprocess.run(cmd, capture_output=True, text=True)
     if proc.returncode != 0:
         print(
@@ -1424,7 +1291,6 @@ def main():
 
     if flags:
         if "id"          in flags: sys.exit(handle_id(apprunx))
-        if "is_format3"  in flags: sys.exit(handle_is_format3(apprunx))
         if "info"        in flags: sys.exit(handle_info(apprunx, flags["info"] or None))
         if "box_path"    in flags: sys.exit(handle_box_path(apprunx))
         if "prepare"     in flags: sys.exit(handle_prepare(apprunx, _get_mountpath(apprunx)[1], register=False))

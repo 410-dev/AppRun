@@ -27,31 +27,10 @@ UNSQUASHFS = "/usr/bin/unsquashfs"
 MKSQUASHFS = "/usr/bin/mksquashfs"
 
 
-class BundleFormat(IntEnum):
-    UNKNOWN  = 0
-    FORMAT_1 = 1
-    FORMAT_2 = 2
-    FORMAT_3 = 3
-
 
 # ==============================================================================
 # Bundle
 # ==============================================================================
-
-def get_bundle_format(path: str) -> BundleFormat:
-    p = Path(path)
-    if p.is_file() and p.suffix == ".apprunx":
-        return BundleFormat.FORMAT_3
-    if p.is_dir():
-        if (p / "AppRunMeta" / "id").exists():
-            return BundleFormat.FORMAT_2
-        if (p / "id").exists():
-            return BundleFormat.FORMAT_1
-    return BundleFormat.UNKNOWN
-
-
-def is_squashfs(path: str) -> bool:
-    return get_bundle_format(path) == BundleFormat.FORMAT_3
 
 
 def get_bundle_id(path: str) -> str:
@@ -62,15 +41,9 @@ def get_bundle_id(path: str) -> str:
     FORMAT_2: AppRunMeta/id
     FORMAT_1: id
     """
-    fmt = get_bundle_format(path)
     val = ""
     try:
-        if fmt == BundleFormat.FORMAT_3:
-            val = peek_file(path, "AppRunMeta/id").strip()
-        if fmt == BundleFormat.FORMAT_2:
-            val = (Path(path) / "AppRunMeta" / "id").read_text().strip()
-        if fmt == BundleFormat.FORMAT_1:
-            val = (Path(path) / "id").read_text().strip()
+        val = peek_file(path, "AppRunMeta/id").strip()
 
         # 빈 값인지 체크
         if val:
@@ -94,18 +67,10 @@ def get_bundle_meta(path: str) -> dict:
     meta.json 파싱. Format 3 전용.
     path 는 .apprunx 파일 또는 마운트된 디렉터리 둘 다 허용.
     """
-    raw = ""
     try:
-        p = Path(path)
-        if p.is_file() and p.suffix == ".apprunx":
-            # 마운트 없이 읽기
-            raw = peek_file(path, "AppRunMeta/meta.json")
-        elif p.is_dir():
-            # 마운트된 경로 또는 Format 2 디렉터리
-            meta_file = p / "AppRunMeta" / "meta.json"
-            if meta_file.exists():
-                raw = meta_file.read_text()
+        raw = peek_file(path, "AppRunMeta/meta.json")
     except Exception:
+        print(f"[-] Failed to read meta.json from {path}. Is it a valid Format 3 bundle?")
         return {}
     try:
         return json.loads(raw)
