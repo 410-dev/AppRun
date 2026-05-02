@@ -89,7 +89,7 @@ def handle_info(apprunx: str, keys: list[str] | None = None) -> int:
 
     all_info = {"id": app_id, "format": "3"}
     all_info.update(meta)
-    
+
     if keys:
         for key in keys:
             print(f"{key}: {all_info.get(key, '')}")
@@ -257,11 +257,23 @@ def _prepare_python(bundle: str, app_id: str, box: Path) -> int:
     return 0
 
 
+
+
 def _find_terminal() -> list[str] | None:
     """
     사용 가능한 터미널 에뮬레이터를 찾아 반환
     반환 형식: [실행파일, <명령 실행 플래그>]
     """
+
+    if os.geteuid() == 0:
+        # root 권한은 terminal 에서 처리하는 것으로 기본 간주하며,
+        # DBUS_SESSION_BUS_ADDRESS, DBUS_STARTER_ADDRESS, DBUS_STARTER_BUS_TYPE 가 모두 있고,
+        # DISPLAY 가 있으면 현재 root 로 로그인 한것이니 터미널을 사용을 시도함
+        if libapprun.can_use_dbus_and_gui():
+            pass
+        else:
+            return None
+
     candidates = [
         ("ptyxis",              "--"),
         ("alacritty",           "-e"),
@@ -557,6 +569,10 @@ def _wrap_root(cmd: list[str], meta: dict) -> list[str]:
 
 def _wrap_terminal(cmd: list[str], meta: dict) -> list[str]:
     if not meta.get("launch_in_terminal", False):
+        return cmd
+
+    if not libapprun.can_use_dbus_and_gui():
+        print(f"CRITICAL ERROR: Unable to launch application within wrapped terminal emulator. DBUS or GUI environment not detected.", file=sys.stderr)
         return cmd
 
     terminals = [

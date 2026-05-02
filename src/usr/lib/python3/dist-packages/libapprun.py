@@ -68,9 +68,16 @@ def get_bundle_meta(path: str) -> dict:
     path 는 .apprunx 파일 또는 마운트된 디렉터리 둘 다 허용.
     """
     try:
-        raw = peek_file(path, "AppRunMeta/meta.json")
-    except Exception:
-        print(f"[-] Failed to read meta.json from {path}. Is it a valid Format 3 bundle?")
+        if os.path.isdir(path):
+            # 마운트된 디렉터리인 경우
+            with open(Path(path) / "AppRunMeta" / "meta.json", "r") as f:
+                raw = f.read()
+        elif os.path.isfile(path):
+            raw = peek_file(path, "AppRunMeta/meta.json")
+        else:
+            raise FileNotFoundError(f"{path} not found in {path}")
+    except Exception as exc:
+        print(f"[-] Failed to read meta.json from {path}. Is it a valid bundle? ({exc})")
         return {}
     try:
         return json.loads(raw)
@@ -192,13 +199,21 @@ def get_checksum(path: str) -> str:
             h.update(chunk)
     return h.hexdigest()
 
+def can_use_dbus_and_gui() -> bool:
+    if os.environ.get("DISPLAY") and all(os.environ.get(k) for k in ["DBUS_SESSION_BUS_ADDRESS", "DBUS_STARTER_ADDRESS", "DBUS_STARTER_BUS_TYPE"]):
+        return True
+    else:
+        return False
 
 def notify(title: str, message: str) -> None:
-    if shutil.which("notify-send"):
+    if shutil.which("notify-send") and can_use_dbus_and_gui():
         subprocess.run(["notify-send", title, message])
 
 def show_gui_alert(title: str, message: str, level: str = "info") -> None:
     print(f"[AppRun] {title}: {message}")
+    if not can_use_dbus_and_gui():
+        return
+
     zenity_flag  = {"info": "--info", "warning": "--warning", "error": "--error"}.get(level, "--info")
     kdialog_flag = {"info": "--msgbox", "warning": "--sorry",  "error": "--error"}.get(level, "--msgbox")
     if shutil.which("zenity"):
