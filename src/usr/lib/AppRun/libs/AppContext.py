@@ -6,6 +6,8 @@ import sys
 import fcntl
 import atexit
 import signal
+import grp
+import pwd
 from pathlib import Path
 import tempfile
 
@@ -783,6 +785,29 @@ class AppContext:
         print("Service installed successfully.")
         print(result.stdout)
         return True
+
+
+    def is_user_in_group(self, groupname):
+        try:
+            username = self.username()
+            # Get the list of users explicitly listed in the group
+            group_info = grp.getgrnam(groupname)
+            if username in group_info.gr_mem:
+                return True
+
+            # Also check if the group is the user's primary group
+            user_info = pwd.getpwnam(username)
+            primary_group_info = grp.getgrgid(user_info.pw_gid)
+            if primary_group_info.gr_name == groupname:
+                return True
+
+            return False
+        except KeyError:
+            # Group or User does not exist
+            return False
+
+    def is_user_in_group_or_privileged(self, groupname):
+        return self.is_user_in_group(groupname) or self.ensure_privileged(False)
 
 
     def __str__(self):

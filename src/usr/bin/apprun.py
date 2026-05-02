@@ -77,32 +77,61 @@ def _sudo_cmd() -> list[str]:
     return ["sudo"]
 
 
+
 def _is_tty_context() -> bool:
     """sudo 비밀번호 프롬프트를 받을 수 있는 대화형 터미널인지 확인."""
     return sys.stdin.isatty() and sys.stderr.isatty()
 
 
+# ==============================================================================
+# Sudo/Root Context Helpers
+# ==============================================================================
+
+def _sudo_invoking_user_info() -> tuple[str, pwd.struct_passwd] | None:
+    """sudo 로 들어온 root 컨텍스트라면 원래 로그인 사용자 정보를 반환."""
+    if os.geteuid() != 0:
+        return None
+
+    sudo_user = os.environ.get("SUDO_USER")
+    if not sudo_user or sudo_user == "root":
+        return None
+
+    try:
+        return sudo_user, pwd.getpwnam(sudo_user)
+    except KeyError:
+        return None
+
+
+
+
 def _gui_terminal_cmd(terminal: list[str]) -> list[str]:
     """
     GUI 터미널은 root 가 아니라 실제 로그인 사용자 세션에서 실행한다.
-    sudo 로 apprun3 이 실행된 상태에서 ptyxis/gnome-terminal 등을 root 로 띄우면
-    DBUS_SESSION_BUS_ADDRESS / XDG_RUNTIME_DIR 부재로 실패할 수 있다.
+
+    이 함수는 root GUI 세션 보정용 fallback 이며, sudo 로 들어온 root 컨텍스트는
+    _has_gui() 에서 headless 로 처리되어 일반적으로 이 경로를 타지 않는다.
     """
     if os.geteuid() != 0:
         return terminal
 
-    sudo_user = os.environ.get("SUDO_USER")
-    sudo_uid = os.environ.get("SUDO_UID")
-    if not sudo_user or sudo_user == "root":
+    user_info = _sudo_invoking_user_info()
+    if user_info is None:
         return terminal
 
+    sudo_user, pw = user_info
+    sudo_uid = os.environ.get("SUDO_UID")
+
     try:
-        uid = int(sudo_uid) if sudo_uid else pwd.getpwnam(sudo_user).pw_uid
-    except (ValueError, KeyError):
+        uid = int(sudo_uid) if sudo_uid else pw.pw_uid
+    except ValueError:
         return terminal
 
     env_args: list[str] = [
         "env",
+        f"HOME={pw.pw_dir}",
+        f"USER={sudo_user}",
+        f"LOGNAME={sudo_user}",
+        f"PWD={pw.pw_dir}",
         f"XDG_RUNTIME_DIR=/run/user/{uid}",
     ]
 
@@ -239,6 +268,18 @@ def _validate_entry(bundle: str) -> bool:
 
 
 def _run_cmd_gui_term_prefer(gui_cmds: list[str]) -> bool:
+    """
+    GUI 세션에서는 새 터미널 창을 선호하고, headless/sudo-root 컨텍스트에서는
+    현재 세션에서 직접 실행한다.
+
+    sudo frameworkctl -> apprun3 처럼 sudo 로 들어온 root 컨텍스트에서는
+    root GUI 셸이 아니므로 터미널 에뮬레이터를 열지 않는다.
+    """
+    if not _has_gui():
+        print(f"[AppRun] 실행: {shlex.join(gui_cmds)}")
+        proc = subprocess.run(gui_cmds)
+        return proc.returncode == 0
+
     terminal = _find_terminal()
 
     if terminal:
@@ -256,7 +297,7 @@ def _run_cmd_gui_term_prefer(gui_cmds: list[str]) -> bool:
                 "  echo ''; echo '❌ 설치 실패. 창을 닫으려면 아무 키나 누르세요'; read -n 1; "
                 "fi"
             )
-            proc = subprocess.run(_gui_terminal_cmd(terminal) + ["bash", "-c", shell_cmd])
+            proc = subprocess.run(terminal + ["bash", "-c", shell_cmd])
 
             try:
                 actual_code = int(Path(exitcode_file).read_text().strip())
@@ -266,17 +307,14 @@ def _run_cmd_gui_term_prefer(gui_cmds: list[str]) -> bool:
             return actual_code == 0
         finally:
             Path(exitcode_file).unlink(missing_ok=True)
-    else:
-        if _has_gui():
-            libapprun.notify(
-                "[AppRun] 의존성 설치중",
-                f"[AppRun] 터미널 에뮬레이터를 찾을 수 없습니다. "
-                f"명령을 백그라운드에서 실행합니다: {shlex.join(gui_cmds)}",
-            )
-        else:
-            print(f"[AppRun] 실행: {shlex.join(gui_cmds)}")
-        proc = subprocess.run(gui_cmds)
-        return proc.returncode == 0
+
+    libapprun.notify(
+        "[AppRun] 의존성 설치중",
+        f"[AppRun] 터미널 에뮬레이터를 찾을 수 없습니다. "
+        f"명령을 백그라운드에서 실행합니다: {shlex.join(gui_cmds)}",
+    )
+    proc = subprocess.run(gui_cmds)
+    return proc.returncode == 0
 
 
 def _prepare_python(bundle: str, app_id: str, box: Path) -> int:
