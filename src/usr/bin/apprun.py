@@ -1080,6 +1080,38 @@ def handle_install_as_global_user_service(
         print("\n현재 로그인한 사용자는 systemctl --user daemon-reload 후 반영됩니다.")
     return 0
 
+
+def handle_uninstall_as_global_user_service(apprunx: str) -> int:
+    """--install-as-global-user-service 로 생성된 global user 서비스를 비활성화·삭제."""
+    app_id   = libapprun.get_bundle_id(apprunx)
+    svc_name = f"{_sanitize_service_name(app_id)}.service"
+    dest     = SYSTEMD_GLOBAL_USER_UNIT_DIR / svc_name
+
+    if not dest.exists():
+        print(f"Error: 서비스 파일이 존재하지 않습니다: {dest}", file=sys.stderr)
+        return 1
+
+    if not _can_escalate():
+        print("Error: 글로벌 user 서비스 제거에는 root 권한이 필요합니다.", file=sys.stderr)
+        return 1
+
+    if os.geteuid() == 0:
+        subprocess.run(["systemctl", "--global", "disable", svc_name],
+                       capture_output=True)
+        dest.unlink()
+    else:
+        script = (
+            f"systemctl --global disable {shlex.quote(svc_name)}; "
+            f"rm -f {shlex.quote(str(dest))}"
+        )
+        if not _run_privileged(script):
+            return 1
+
+    print(f"글로벌 user 서비스 제거 완료: {svc_name}")
+    print("\n현재 로그인한 사용자는 systemctl --user daemon-reload 후 반영됩니다.")
+    print(f"실행 중인 인스턴스는 systemctl --user stop {svc_name} 로 중지할 수 있습니다.")
+    return 0
+
 # ==============================================================================
 # 서비스 단순 제거 핸들러
 # ==============================================================================
@@ -1321,6 +1353,10 @@ flags 가 있으면 해당 작업을 수행하고 종료합니다.
                                   type 생략 시 simple
                                   --enable: systemctl --global enable 수행
 
+    --uninstall-as-global-user-service
+                                --install-as-global-user-service 로 생성된
+                                global user 서비스를 비활성화·삭제
+
     --uninstall-as-service      --install-as-service 로 생성된 서비스를
                                 중지·비활성화·삭제
 
@@ -1336,6 +1372,7 @@ flags 가 있으면 해당 작업을 수행하고 종료합니다.
     apprun3 --register my-app.apprunx               데스크톱 등록
     apprun3 --install-as-service=oneshot,plymouth-quit-wait.service+systemd-user-sessions.service,network.target my-app.apprunx
     apprun3 --install-as-global-user-service=simple --enable my-app.apprunx
+    apprun3 --uninstall-as-global-user-service my-app.apprunx
 """
 
 
@@ -1391,6 +1428,8 @@ def parse_args(argv: list[str]):
             flags["install_as_global_user_service"] = None
         elif arg.startswith("--install-as-global-user-service="):
             flags["install_as_global_user_service"] = arg[len("--install-as-global-user-service="):]
+        elif arg == "--uninstall-as-global-user-service":
+            flags["uninstall_as_global_user_service"] = True
         elif arg.startswith("--user=") and ("install_as_service" in flags or "uninstall_as_service" in flags):
             flags["service_install_user"] = arg[len("--user="):]
         elif arg == "--uninstall-services":
@@ -1447,6 +1486,8 @@ def main():
             sys.exit(handle_install_as_service(apprunx, flags["install_as_service"], flags.get("service_install_and_enable", False), flags.get("service_install_and_start", False), flags.get("service_install_user")))
         if "install_as_global_user_service" in flags:
             sys.exit(handle_install_as_global_user_service(apprunx, flags["install_as_global_user_service"], flags.get("service_install_and_enable", False), flags.get("service_install_and_start", False)))
+        if "uninstall_as_global_user_service" in flags:
+            sys.exit(handle_uninstall_as_global_user_service(apprunx))
         if "uninstall_services"   in flags: sys.exit(handle_uninstall_services(apprunx))
         if "uninstall_as_service" in flags: sys.exit(handle_uninstall_as_service(apprunx, flags.get("service_install_user")))
 
