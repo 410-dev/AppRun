@@ -787,6 +787,63 @@ class AppContext:
         return True
 
 
+    def install_as_global_user(self, svc_type: str = "simple", after: list[str] = None, before: list[str] = None, no_interaction: bool = False, enable: bool = True) -> bool:
+        """AppRun 번들을 systemd global user 서비스로 설치하는 헬퍼.
+        명령 실행 방법
+        # apprun --install-as-global-user-service=<type>,<after>+<after>+<after>....,<before>+<before>+<before>.... --enable
+        """
+        import subprocess
+        import sys
+        import shutil
+
+        if not no_interaction:
+            if shutil.which("zenity"):
+                try:
+                    subprocess.run([
+                        "zenity", "--question",
+                        "--title=글로벌 사용자 서비스 설치 확인",
+                        f"--text={self.id()} 서비스를 모든 사용자의 user service 로 등록하시겠습니까?"
+                    ], check=True)
+                except subprocess.CalledProcessError:
+                    print("Global user service installation cancelled by user.")
+                    return False
+            else:
+                response = input(f"Do you want to register {self.id()} as a global user service for all users? (y/N): ")
+                if response.strip().lower() != 'y':
+                    print("Global user service installation cancelled by user.")
+                    return False
+
+        if svc_type not in ('oneshot', 'simple', 'forking', 'notify', 'idle'):
+            raise ValueError(f"Unsupported service type: {svc_type}")
+
+        after_deps = after or []
+        before_deps = before or []
+        service_spec = f"{svc_type},{'+'.join(after_deps)},{'+'.join(before_deps)}"
+
+        print(f"Installing global user service with type '{svc_type}'...")
+        cmd = ["apprun", f"--install-as-global-user-service={service_spec}"]
+        if enable:
+            cmd.append("--enable")
+        cmd.append(self._bundle_path)
+
+        try:
+            result = subprocess.run(cmd, check=True, capture_output=True, text=True)
+        except subprocess.CalledProcessError as e:
+            print("Failed to install global user service.", file=sys.stderr)
+            print(e.stderr, file=sys.stderr)
+            return False
+
+        try:
+            if shutil.which("notify-send"):
+                subprocess.run(["notify-send", "글로벌 사용자 서비스 등록됨", f"{self.id()} 서비스가 모든 사용자의 user service 로 등록됐습니다."])
+        except:
+            pass
+
+        print("Global user service installed successfully.")
+        print(result.stdout)
+        return True
+
+
     def is_user_in_group(self, groupname):
         try:
             username = self.username()
@@ -821,4 +878,3 @@ class AppContext:
             f"bundle_id={self._bundle_id}"
             ")"
         )
-

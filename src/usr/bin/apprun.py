@@ -26,6 +26,7 @@ import libapprun
 UV_BIN          = "/usr/local/bin/uv"
 PYTHON3_BIN     = "/usr/bin/python3"
 SYSTEMD_UNIT_DIR = Path("/etc/systemd/system")
+SYSTEMD_GLOBAL_USER_UNIT_DIR = Path("/etc/systemd/user")
 
 
 # ==============================================================================
@@ -762,6 +763,36 @@ def _sanitize_service_name(app_id: str) -> str:
     return re.sub(r"[^.A-Za-z0-9_\-]", "-", app_id)
 
 
+def _parse_generated_service_spec(
+    spec: str | None,
+    usage_flag: str,
+    default_type: str | None = None,
+) -> tuple[str, str, str] | None:
+    """
+    <type>,<after>+<after>,<before>+<before> 형식의 생성 서비스 설정을 파싱.
+    반환값은 (service_type, after_units, before_units).
+    """
+    if spec is None and default_type is not None:
+        spec = default_type
+
+    parts = (spec or "").split(",")
+    if not parts[0].strip():
+        print("Error: 서비스 타입이 지정되지 않았습니다.", file=sys.stderr)
+        print(f"사용법: {usage_flag}=<type>[,<after>][,<before>]", file=sys.stderr)
+        return None
+
+    svc_type    = parts[0].strip()
+    valid_types = ("simple", "oneshot", "forking", "notify", "idle")
+    if svc_type not in valid_types:
+        print(f"Error: 알 수 없는 서비스 타입 '{svc_type}'.", file=sys.stderr)
+        print(f"지원 타입: {', '.join(valid_types)}", file=sys.stderr)
+        return None
+
+    after_units  = " ".join(parts[1].strip().split("+")) if len(parts) >= 2 and parts[1].strip() else ""
+    before_units = " ".join(parts[2].strip().split("+")) if len(parts) >= 3 and parts[2].strip() else ""
+    return svc_type, after_units, before_units
+
+
 def _get_user_systemd_env(username: str) -> dict[str, str] | None:
     """
     SSH 등 비대화형 환경에서도 systemctl --user 가 동작하도록
@@ -862,21 +893,10 @@ def handle_install_as_service(
         _ensure_linger(resolved_user)
 
     # ── spec 파싱 ──────────────────────────────────────────────────────────
-    parts = spec.split(",")
-    if not parts[0].strip():
-        print("Error: 서비스 타입이 지정되지 않았습니다.", file=sys.stderr)
-        print("사용법: --install-as-service=<type>[,<after>][,<before>]", file=sys.stderr)
+    parsed = _parse_generated_service_spec(spec, "--install-as-service")
+    if parsed is None:
         return 1
-
-    svc_type    = parts[0].strip()
-    valid_types = ("simple", "oneshot", "forking", "notify", "idle")
-    if svc_type not in valid_types:
-        print(f"Error: 알 수 없는 서비스 타입 '{svc_type}'.", file=sys.stderr)
-        print(f"지원 타입: {', '.join(valid_types)}", file=sys.stderr)
-        return 1
-
-    after_units  = " ".join(parts[1].strip().split("+")) if len(parts) >= 2 and parts[1].strip() else ""
-    before_units = " ".join(parts[2].strip().split("+")) if len(parts) >= 3 and parts[2].strip() else ""
+    svc_type, after_units, before_units = parsed
 
     # ── 설치 경로 결정 ─────────────────────────────────────────────────────
     if user_mode:
@@ -960,6 +980,104 @@ def handle_install_as_service(
     if not enable or not start:
         flag = " --user" if user_mode else ""
         print(f"\n활성화: systemctl{flag} enable --now {svc_name}.service")
+    return 0
+
+
+def handle_install_as_global_user_service(
+    apprunx: str,
+    spec: str | None,
+    enable: bool,
+    start: bool,
+) -> int:
+    """
+    systemd global user unit 을 /etc/systemd/user 에 생성.
+    --enable 이 지정되면 systemctl --global enable 로 모든 사용자에게 기본 활성화.
+    """
+    if not _can_escalate():
+        print("Error: 글로벌 user 서비스 설치에는 root 권한이 필요합니다.", file=sys.stderr)
+        return 1
+
+    parsed = _parse_generated_service_spec(
+        spec,
+        "--install-as-global-user-service",
+        default_type="simple",
+    )
+    if parsed is None:
+        return 1
+    svc_type, after_units, before_units = parsed
+
+    app_id      = libapprun.get_bundle_id(apprunx)
+    apprunx_abs = str(Path(apprunx).resolve())
+    svc_name    = _sanitize_service_name(app_id)
+    dest        = SYSTEMD_GLOBAL_USER_UNIT_DIR / f"{svc_name}.service"
+
+    meta        = libapprun.get_bundle_meta(apprunx)
+    description = meta.get("description", meta.get("name", app_id))
+
+    unit_lines = ["[Unit]", f"Description={description}"]
+    if after_units:
+        unit_lines.append(f"After={after_units}")
+    if before_units:
+        unit_lines.append(f"Before={before_units}")
+
+    service_lines = [
+        "",
+        "[Service]",
+        f"Type={svc_type}",
+        "Environment=PYTHONUNBUFFERED=1",
+        f"ExecStart=/usr/bin/apprun3 {apprunx_abs}",
+    ]
+    if svc_type == "oneshot":
+        service_lines.append("RemainAfterExit=yes")
+
+    install_lines = ["", "[Install]", "WantedBy=default.target"]
+    unit_bytes    = ("\n".join(unit_lines + service_lines + install_lines) + "\n").encode("utf-8")
+
+    if os.geteuid() == 0:
+        SYSTEMD_GLOBAL_USER_UNIT_DIR.mkdir(parents=True, exist_ok=True)
+        dest.write_bytes(unit_bytes)
+        dest.chmod(0o644)
+    else:
+        tmp = _prepare_temp_file(unit_bytes)
+        try:
+            script_parts = [
+                f"mkdir -p {shlex.quote(str(SYSTEMD_GLOBAL_USER_UNIT_DIR))}",
+                f"mv {shlex.quote(tmp)} {shlex.quote(str(dest))}",
+                f"chmod 644 {shlex.quote(str(dest))}",
+            ]
+            if not _run_privileged("; ".join(script_parts)):
+                return 1
+        finally:
+            Path(tmp).unlink(missing_ok=True)
+
+    if enable or start:
+        if os.geteuid() == 0:
+            proc = subprocess.run(
+                ["systemctl", "--global", "enable", f"{svc_name}.service"],
+                capture_output=True, text=True,
+            )
+            if proc.returncode != 0:
+                print(f"Error: systemctl --global enable 실패: {proc.stderr}", file=sys.stderr)
+                return proc.returncode
+        else:
+            if not _run_privileged(f"systemctl --global enable {shlex.quote(svc_name + '.service')}"):
+                return 1
+
+    print(f"글로벌 user 서비스 설치 완료: {svc_name}.service")
+    print(f"  타입:   {svc_type}")
+    if after_units:
+        print(f"  After:  {after_units}")
+    if before_units:
+        print(f"  Before: {before_units}")
+    print(f"  경로:   {dest}")
+
+    if start:
+        print("\n참고: --start 는 글로벌 user 서비스에 즉시 일괄 적용되지 않습니다.")
+        print(f"현재 사용자는 systemctl --user daemon-reload && systemctl --user start {svc_name}.service 로 시작할 수 있습니다.")
+    elif not enable:
+        print(f"\n활성화: sudo systemctl --global enable {svc_name}.service")
+    else:
+        print("\n현재 로그인한 사용자는 systemctl --user daemon-reload 후 반영됩니다.")
     return 0
 
 # ==============================================================================
@@ -1198,6 +1316,11 @@ flags 가 있으면 해당 작업을 수행하고 종료합니다.
                                 --enable: [추가 옵션] 설치 과정에서 자동으로 활성화
                                 --start : [추가 옵션] 설치 과정에서 자동으로 시작 (자동으로 활성화 트리거)
 
+    --install-as-global-user-service[=<type>,<after>,<before>]
+                                /etc/systemd/user 에 global user 서비스를 생성
+                                  type 생략 시 simple
+                                  --enable: systemctl --global enable 수행
+
     --uninstall-as-service      --install-as-service 로 생성된 서비스를
                                 중지·비활성화·삭제
 
@@ -1212,6 +1335,7 @@ flags 가 있으면 해당 작업을 수행하고 종료합니다.
     apprun3 --prepare my-app.apprunx                실행 환경만 준비
     apprun3 --register my-app.apprunx               데스크톱 등록
     apprun3 --install-as-service=oneshot,plymouth-quit-wait.service+systemd-user-sessions.service,network.target my-app.apprunx
+    apprun3 --install-as-global-user-service=simple --enable my-app.apprunx
 """
 
 
@@ -1263,6 +1387,10 @@ def parse_args(argv: list[str]):
             flags["service_install_and_enable"] = True
         elif arg.startswith("--install-as-service="):
             flags["install_as_service"] = arg[len("--install-as-service="):]
+        elif arg == "--install-as-global-user-service":
+            flags["install_as_global_user_service"] = None
+        elif arg.startswith("--install-as-global-user-service="):
+            flags["install_as_global_user_service"] = arg[len("--install-as-global-user-service="):]
         elif arg.startswith("--user=") and ("install_as_service" in flags or "uninstall_as_service" in flags):
             flags["service_install_user"] = arg[len("--user="):]
         elif arg == "--uninstall-services":
@@ -1317,6 +1445,8 @@ def main():
             sys.exit(handle_install_services(apprunx, flags.get("service_install_and_enable", False), flags.get("service_install_and_start", False)))
         if "install_as_service" in flags:
             sys.exit(handle_install_as_service(apprunx, flags["install_as_service"], flags.get("service_install_and_enable", False), flags.get("service_install_and_start", False), flags.get("service_install_user")))
+        if "install_as_global_user_service" in flags:
+            sys.exit(handle_install_as_global_user_service(apprunx, flags["install_as_global_user_service"], flags.get("service_install_and_enable", False), flags.get("service_install_and_start", False)))
         if "uninstall_services"   in flags: sys.exit(handle_uninstall_services(apprunx))
         if "uninstall_as_service" in flags: sys.exit(handle_uninstall_as_service(apprunx, flags.get("service_install_user")))
 
