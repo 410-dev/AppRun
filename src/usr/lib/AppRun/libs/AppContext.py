@@ -662,7 +662,7 @@ class AppContext:
             if existing_pid > 0 and not self._is_process_alive(existing_pid):
                 # stale lock → 파일 제거 후 재시도
                 lock_path.unlink(missing_ok=True)
-                return self.ensure_single_process(lock_id, globally)
+                return self._ensure_single_process(lock_id, globally)
 
             raise ProcessAlreadyRunningError(lock_id, existing_pid)
 
