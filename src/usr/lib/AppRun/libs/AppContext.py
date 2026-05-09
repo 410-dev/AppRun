@@ -718,7 +718,6 @@ class AppContext:
 
         # 현재 사용자 홈 디렉터리와 사용자 이름 가져오기
         username: str = self.username() if user is None else user
-        userhome: str = self.userhome()
 
         # GUI 가 있으면 Zenity 를 통해 팝업으로 물어보고, GUI 가 없으면 팝업 없이 터미널에서 물어봄
         if not no_interaction:
@@ -738,22 +737,7 @@ class AppContext:
                     print("Service installation cancelled by user.")
                     return False
 
-        # $home/.local/apprun/services/ 디렉터리에 번들 복사
-        services_dir = os.path.join(userhome, ".local", "apprun", "services")
-        os.makedirs(services_dir, exist_ok=True)
-        service_bundle_path = os.path.join(services_dir, os.path.basename(self._bundle_path))
-        print(f"Copying {self._bundle_path} ----->>>> {service_bundle_path}")
-
-        # Format 3
-        if os.path.isfile(self._bundle_path):
-            shutil.copy2(self._bundle_path, service_bundle_path)
-
-        # Not found
-        else:
-            print(f"Error: Bundle path '{self._bundle_path}' does not exist.", file=sys.stderr)
-            return False
-
-        if svc_type not in ('oneshot', 'simple', 'forking', 'notify'):
+        if svc_type not in ('oneshot', 'simple', 'forking', 'notify', 'idle'):
             raise ValueError(f"Unsupported service type: {svc_type}")
 
         after_deps = after or []
@@ -761,7 +745,7 @@ class AppContext:
 
         # 명령어
         print(f"Installing service for user '{username}' with type '{svc_type}'...")
-        cmd = ["apprun", f"--install-as-service={svc_type},{'+'.join(after_deps)},{'+'.join(before_deps)}", f"--user={username}", service_bundle_path]
+        cmd = ["apprun", f"--install-as-service={svc_type},{'+'.join(after_deps)},{'+'.join(before_deps)}", f"--user={username}", self._bundle_path]
 
         # enable 옵션이 True 면 --enable 플래그 추가
         if enable:

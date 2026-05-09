@@ -27,6 +27,9 @@ UV_BIN          = "/usr/local/bin/uv"
 PYTHON3_BIN     = "/usr/bin/python3"
 SYSTEMD_UNIT_DIR = Path("/etc/systemd/system")
 SYSTEMD_GLOBAL_USER_UNIT_DIR = Path("/etc/systemd/user")
+SERVICE_STORE_ROOT = Path("/usr/share/services.apprd")
+SYSTEM_SERVICE_STORE_DIR = SERVICE_STORE_ROOT / "system"
+GLOBAL_USER_SERVICE_STORE_DIR = SERVICE_STORE_ROOT / "global"
 
 
 # ==============================================================================
@@ -41,6 +44,9 @@ def get_real_user() -> str:
     sudo_uid = os.environ.get("SUDO_UID")
     if sudo_uid:
         return pwd.getpwuid(int(sudo_uid)).pw_name
+    pkexec_uid = os.environ.get("PKEXEC_UID")
+    if pkexec_uid:
+        return pwd.getpwuid(int(pkexec_uid)).pw_name
     return pwd.getpwuid(os.getuid()).pw_name
 
 
@@ -73,6 +79,36 @@ def _can_escalate() -> bool:
         or (_has_gui() and _pkexec_available())
         or bool(shutil.which("sudo"))
     )
+
+
+def _current_cli_command() -> str:
+    argv0 = sys.argv[0]
+    if os.sep in argv0:
+        return str(Path(argv0).resolve())
+    return shutil.which(argv0) or argv0
+
+
+def _argv_with_absolute_bundle(apprunx: str) -> list[str]:
+    args: list[str] = []
+    replaced = False
+    for arg in sys.argv[1:]:
+        if not replaced and arg == apprunx:
+            args.append(str(Path(apprunx).resolve()))
+            replaced = True
+        else:
+            args.append(arg)
+    return args
+
+
+def _reexec_privileged(apprunx: str) -> int:
+    """현재 CLI 호출을 root 권한으로 한 번 다시 실행."""
+    if not _can_escalate():
+        print("Error: 서비스 설치에는 root 권한이 필요합니다.", file=sys.stderr)
+        return 1
+
+    cmd = _sudo_cmd() + [_current_cli_command(), *_argv_with_absolute_bundle(apprunx)]
+    proc = subprocess.run(cmd)
+    return proc.returncode
 
 
 # ==============================================================================
@@ -673,7 +709,7 @@ def _register_desktop(bundle: str, app_id: str) -> None:
 # 서비스 단순 설치 핸들러
 # ==============================================================================
 def handle_install_services(apprunx: str, enable: bool, start: bool) -> int:
-    """번들 내 services/ 폴더의 .service 파일들을 /etc/systemd/system/ 에 설치."""
+    """번들 내 services/ 폴더의 .service 파일들을 system store 에 복사 후 systemd 에 링크."""
     try:
         file_list = libapprun.list_files(apprunx)
     except Exception as e:
@@ -688,14 +724,15 @@ def handle_install_services(apprunx: str, enable: bool, start: bool) -> int:
         print("Error: 번들 내에 services/*.service 파일이 없습니다.", file=sys.stderr)
         return 1
 
-    if not _can_escalate():
-        print("Error: 서비스 설치에는 root 권한이 필요합니다.", file=sys.stderr)
-        return 1
+    if os.geteuid() != 0:
+        return _reexec_privileged(apprunx)
 
     actions   = (["enable"] if enable else []) + (["start"] if start else [])
     installed: list[str] = []
 
     if os.geteuid() == 0:
+        SYSTEM_SERVICE_STORE_DIR.mkdir(parents=True, exist_ok=True)
+        SYSTEMD_UNIT_DIR.mkdir(parents=True, exist_ok=True)
         for svc_path in service_files:
             svc_name = Path(svc_path).name
             try:
@@ -703,9 +740,13 @@ def handle_install_services(apprunx: str, enable: bool, start: bool) -> int:
             except FileNotFoundError:
                 print(f"Warning: '{svc_path}' 를 읽을 수 없습니다. 건너뜁니다.", file=sys.stderr)
                 continue
-            (SYSTEMD_UNIT_DIR / svc_name).write_bytes(data)
+            stored_unit = SYSTEM_SERVICE_STORE_DIR / svc_name
+            dest = SYSTEMD_UNIT_DIR / svc_name
+            stored_unit.write_bytes(data)
+            stored_unit.chmod(0o644)
+            _replace_symlink(dest, stored_unit)
             installed.append(svc_name)
-            print(f"  설치됨: {svc_name}")
+            print(f"  설치됨: {dest} -> {stored_unit}")
 
         if not installed:
             print("Error: 설치할 서비스 파일이 없습니다.", file=sys.stderr)
@@ -717,7 +758,7 @@ def handle_install_services(apprunx: str, enable: bool, start: bool) -> int:
             if result != 0:
                 return result
     else:
-        tmp_map: list[tuple[str, Path]] = []  # (tmp_path, dest)
+        tmp_map: list[tuple[str, Path, Path]] = []  # (tmp_path, stored_unit, dest)
         try:
             for svc_path in service_files:
                 svc_name = Path(svc_path).name
@@ -726,19 +767,26 @@ def handle_install_services(apprunx: str, enable: bool, start: bool) -> int:
                 except FileNotFoundError:
                     print(f"Warning: '{svc_path}' 를 읽을 수 없습니다. 건너뜁니다.", file=sys.stderr)
                     continue
-                tmp  = _prepare_temp_file(data)
+                tmp = _prepare_temp_file(data)
+                stored_unit = SYSTEM_SERVICE_STORE_DIR / svc_name
                 dest = SYSTEMD_UNIT_DIR / svc_name
-                tmp_map.append((tmp, dest))
+                tmp_map.append((tmp, stored_unit, dest))
                 installed.append(svc_name)
-                print(f"  설치됨: {svc_name}")
+                print(f"  설치됨: {dest} -> {stored_unit}")
 
             if not installed:
                 print("Error: 설치할 서비스 파일이 없습니다.", file=sys.stderr)
                 return 1
 
-            script_parts: list[str] = []
-            for tmp, dest in tmp_map:
-                script_parts += [f"mv {tmp} {dest}", f"chmod 644 {dest}"]
+            script_parts: list[str] = [
+                f"mkdir -p {shlex.quote(str(SYSTEM_SERVICE_STORE_DIR))} {shlex.quote(str(SYSTEMD_UNIT_DIR))}"
+            ]
+            for tmp, stored_unit, dest in tmp_map:
+                script_parts += [
+                    f"mv {shlex.quote(tmp)} {shlex.quote(str(stored_unit))}",
+                    f"chmod 644 {shlex.quote(str(stored_unit))}",
+                    f"ln -sfn {shlex.quote(str(stored_unit))} {shlex.quote(str(dest))}",
+                ]
             script_parts.append("systemctl daemon-reload")
             for action in actions:
                 script_parts.append(f"systemctl {action} {' '.join(installed)}")
@@ -746,7 +794,7 @@ def handle_install_services(apprunx: str, enable: bool, start: bool) -> int:
             if not _run_privileged("; ".join(script_parts)):
                 return 1
         finally:
-            for tmp, _ in tmp_map:
+            for tmp, _, _ in tmp_map:
                 Path(tmp).unlink(missing_ok=True)
 
     print(f"\n{len(installed)}개 서비스 파일 설치 완료.")
@@ -845,7 +893,7 @@ def _ensure_linger(username: str) -> bool:
 
     print(f"  linger 활성화 중 ({username})...", file=sys.stderr)
 
-    cmd = ([] if os.geteuid() == 0 else ["sudo"]) + ["loginctl", "enable-linger", username]
+    cmd = _sudo_cmd() + ["loginctl", "enable-linger", username]
     proc = subprocess.run(cmd, capture_output=True, text=True)
     if proc.returncode != 0:
         print(
@@ -864,6 +912,41 @@ def _prepare_temp_file(data: bytes) -> str:
         return f.name
 
 
+def _prepare_temp_copy(src: str) -> str:
+    """src 를 임시파일에 복사하고 경로 반환. 권한 상승 불필요."""
+    fd, tmp_path = tempfile.mkstemp()
+    os.close(fd)
+    shutil.copy2(src, tmp_path)
+    return tmp_path
+
+
+def _user_service_store_dir(username: str) -> Path:
+    return Path(f"~{username}").expanduser() / ".local" / "share" / "services.apprd"
+
+
+def _stored_service_paths(store_dir: Path, svc_name: str) -> tuple[Path, Path]:
+    return store_dir / f"{svc_name}.apprunx", store_dir / f"{svc_name}.service"
+
+
+def _replace_symlink(link_path: Path, target_path: Path) -> None:
+    if link_path.exists() or link_path.is_symlink():
+        link_path.unlink()
+    link_path.symlink_to(target_path)
+
+
+def _quote_paths(paths: list[Path]) -> str:
+    return " ".join(shlex.quote(str(path)) for path in paths)
+
+
+def _remove_paths(paths: list[Path], use_privilege: bool = False) -> None:
+    existing = [path for path in paths if path.exists() or path.is_symlink()]
+    if not existing:
+        return
+    if os.geteuid() == 0 or not use_privilege:
+        for path in existing:
+            path.unlink(missing_ok=True)
+    else:
+        _run_privileged(f"rm -f {_quote_paths(existing)}")
 
 
 def handle_install_as_service(
@@ -876,8 +959,8 @@ def handle_install_as_service(
     """
     --install-as-service=<type>,<after>+<after>...,<before>+<before>...
     지정된 설정으로 .service 파일을 생성하고 systemd 에 설치.
-    - 지정 user == 현재 실제 user  →  ~/.config/systemd/user/ (권한 불필요)
-    - 지정 user != 현재 실제 user  →  /etc/systemd/system/   (root 필요)
+    - 지정 user == 현재 실제 user  →  ~/.local/share/services.apprd 에 복사 후 user systemd 에 링크
+    - 지정 user != 현재 실제 user  →  /usr/share/services.apprd/system 에 복사 후 systemd 에 링크
     """
     app_id        = libapprun.get_bundle_id(apprunx)
     apprunx_abs   = str(Path(apprunx).resolve())
@@ -898,18 +981,24 @@ def handle_install_as_service(
         return 1
     svc_type, after_units, before_units = parsed
 
+    if not user_mode and os.geteuid() != 0:
+        return _reexec_privileged(apprunx)
+
     # ── 설치 경로 결정 ─────────────────────────────────────────────────────
     if user_mode:
-        dest_dir = Path(f"~{resolved_user}").expanduser() / ".config" / "systemd" / "user"
+        store_dir = _user_service_store_dir(resolved_user)
+        dest_dir  = Path(f"~{resolved_user}").expanduser() / ".config" / "systemd" / "user"
         dest_dir.mkdir(parents=True, exist_ok=True)
     else:
         if not _can_escalate():
             print("Error: 서비스 설치에는 root 권한이 필요합니다.", file=sys.stderr)
             return 1
-        dest_dir = SYSTEMD_UNIT_DIR
+        store_dir = SYSTEM_SERVICE_STORE_DIR
+        dest_dir  = SYSTEMD_UNIT_DIR
 
     svc_name = _sanitize_service_name(app_id)
-    dest     = dest_dir / f"{svc_name}.service"
+    stored_bundle, stored_unit = _stored_service_paths(store_dir, svc_name)
+    dest = dest_dir / f"{svc_name}.service"
 
     # ── .service 파일 생성 ─────────────────────────────────────────────────
     meta        = libapprun.get_bundle_meta(apprunx)
@@ -926,7 +1015,7 @@ def handle_install_as_service(
         "[Service]",
         f"Type={svc_type}",
         "Environment=PYTHONUNBUFFERED=1",
-        f"ExecStart=/usr/bin/apprun3 {apprunx_abs}",
+        f"ExecStart=/usr/bin/apprun3 {stored_bundle}",
     ]
     if not user_mode:
         service_lines.append(f"User={resolved_user}")
@@ -941,32 +1030,49 @@ def handle_install_as_service(
 
     # ── 파일 쓰기 + daemon-reload + enable/start ───────────────────────────
     if user_mode:
-        dest.write_bytes(unit_bytes)
+        store_dir.mkdir(parents=True, exist_ok=True)
+        dest_dir.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(apprunx_abs, stored_bundle)
+        stored_unit.write_bytes(unit_bytes)
+        stored_bundle.chmod(0o644)
+        stored_unit.chmod(0o644)
+        _replace_symlink(dest, stored_unit)
         _systemctl_daemon_reload(user_mode=True, env=user_env)
         if actions:
             result = _systemctl_batch(actions, [svc_name], user_mode=True, env=user_env)
             if result != 0:
                 return result
     elif os.geteuid() == 0:
-        dest.write_bytes(unit_bytes)
+        store_dir.mkdir(parents=True, exist_ok=True)
+        dest_dir.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(apprunx_abs, stored_bundle)
+        stored_unit.write_bytes(unit_bytes)
+        stored_bundle.chmod(0o644)
+        stored_unit.chmod(0o644)
+        _replace_symlink(dest, stored_unit)
         _systemctl_daemon_reload()
         if actions:
             result = _systemctl_batch(actions, [svc_name])
             if result != 0:
                 return result
     else:
-        tmp = _prepare_temp_file(unit_bytes)
+        tmp_unit = _prepare_temp_file(unit_bytes)
+        tmp_bundle = _prepare_temp_copy(apprunx_abs)
         try:
             script_parts = [
-                f"mv {tmp} {dest}",
-                f"chmod 644 {dest}",
+                f"mkdir -p {shlex.quote(str(store_dir))} {shlex.quote(str(dest_dir))}",
+                f"mv {shlex.quote(tmp_bundle)} {shlex.quote(str(stored_bundle))}",
+                f"mv {shlex.quote(tmp_unit)} {shlex.quote(str(stored_unit))}",
+                f"chmod 644 {shlex.quote(str(stored_bundle))} {shlex.quote(str(stored_unit))}",
+                f"ln -sfn {shlex.quote(str(stored_unit))} {shlex.quote(str(dest))}",
                 "systemctl daemon-reload",
             ] + [f"systemctl {a} {svc_name}" for a in actions]
 
             if not _run_privileged("; ".join(script_parts)):
                 return 1
         finally:
-            Path(tmp).unlink(missing_ok=True)
+            Path(tmp_unit).unlink(missing_ok=True)
+            Path(tmp_bundle).unlink(missing_ok=True)
 
     # ── 완료 출력 ──────────────────────────────────────────────────────────
     print(f"서비스 설치 완료 ({'user' if user_mode else 'system'}): {svc_name}.service")
@@ -975,7 +1081,8 @@ def handle_install_as_service(
         print(f"  After:  {after_units}")
     if before_units:
         print(f"  Before: {before_units}")
-    print(f"  경로:   {dest}")
+    print(f"  번들:   {stored_bundle}")
+    print(f"  유닛:   {dest} -> {stored_unit}")
 
     if not enable or not start:
         flag = " --user" if user_mode else ""
@@ -990,13 +1097,9 @@ def handle_install_as_global_user_service(
     start: bool,
 ) -> int:
     """
-    systemd global user unit 을 /etc/systemd/user 에 생성.
+    systemd global user unit 을 /usr/share/services.apprd/global 에 생성 후 /etc/systemd/user 에 링크.
     --enable 이 지정되면 systemctl --global enable 로 모든 사용자에게 기본 활성화.
     """
-    if not _can_escalate():
-        print("Error: 글로벌 user 서비스 설치에는 root 권한이 필요합니다.", file=sys.stderr)
-        return 1
-
     parsed = _parse_generated_service_spec(
         spec,
         "--install-as-global-user-service",
@@ -1006,9 +1109,14 @@ def handle_install_as_global_user_service(
         return 1
     svc_type, after_units, before_units = parsed
 
+    if os.geteuid() != 0:
+        return _reexec_privileged(apprunx)
+
     app_id      = libapprun.get_bundle_id(apprunx)
     apprunx_abs = str(Path(apprunx).resolve())
     svc_name    = _sanitize_service_name(app_id)
+    store_dir   = GLOBAL_USER_SERVICE_STORE_DIR
+    stored_bundle, stored_unit = _stored_service_paths(store_dir, svc_name)
     dest        = SYSTEMD_GLOBAL_USER_UNIT_DIR / f"{svc_name}.service"
 
     meta        = libapprun.get_bundle_meta(apprunx)
@@ -1025,7 +1133,7 @@ def handle_install_as_global_user_service(
         "[Service]",
         f"Type={svc_type}",
         "Environment=PYTHONUNBUFFERED=1",
-        f"ExecStart=/usr/bin/apprun3 {apprunx_abs}",
+        f"ExecStart=/usr/bin/apprun3 {stored_bundle}",
     ]
     if svc_type == "oneshot":
         service_lines.append("RemainAfterExit=yes")
@@ -1034,21 +1142,29 @@ def handle_install_as_global_user_service(
     unit_bytes    = ("\n".join(unit_lines + service_lines + install_lines) + "\n").encode("utf-8")
 
     if os.geteuid() == 0:
+        store_dir.mkdir(parents=True, exist_ok=True)
         SYSTEMD_GLOBAL_USER_UNIT_DIR.mkdir(parents=True, exist_ok=True)
-        dest.write_bytes(unit_bytes)
-        dest.chmod(0o644)
+        shutil.copy2(apprunx_abs, stored_bundle)
+        stored_unit.write_bytes(unit_bytes)
+        stored_bundle.chmod(0o644)
+        stored_unit.chmod(0o644)
+        _replace_symlink(dest, stored_unit)
     else:
-        tmp = _prepare_temp_file(unit_bytes)
+        tmp_unit = _prepare_temp_file(unit_bytes)
+        tmp_bundle = _prepare_temp_copy(apprunx_abs)
         try:
             script_parts = [
-                f"mkdir -p {shlex.quote(str(SYSTEMD_GLOBAL_USER_UNIT_DIR))}",
-                f"mv {shlex.quote(tmp)} {shlex.quote(str(dest))}",
-                f"chmod 644 {shlex.quote(str(dest))}",
+                f"mkdir -p {shlex.quote(str(store_dir))} {shlex.quote(str(SYSTEMD_GLOBAL_USER_UNIT_DIR))}",
+                f"mv {shlex.quote(tmp_bundle)} {shlex.quote(str(stored_bundle))}",
+                f"mv {shlex.quote(tmp_unit)} {shlex.quote(str(stored_unit))}",
+                f"chmod 644 {shlex.quote(str(stored_bundle))} {shlex.quote(str(stored_unit))}",
+                f"ln -sfn {shlex.quote(str(stored_unit))} {shlex.quote(str(dest))}",
             ]
             if not _run_privileged("; ".join(script_parts)):
                 return 1
         finally:
-            Path(tmp).unlink(missing_ok=True)
+            Path(tmp_unit).unlink(missing_ok=True)
+            Path(tmp_bundle).unlink(missing_ok=True)
 
     if enable or start:
         if os.geteuid() == 0:
@@ -1069,7 +1185,8 @@ def handle_install_as_global_user_service(
         print(f"  After:  {after_units}")
     if before_units:
         print(f"  Before: {before_units}")
-    print(f"  경로:   {dest}")
+    print(f"  번들:   {stored_bundle}")
+    print(f"  유닛:   {dest} -> {stored_unit}")
 
     if start:
         print("\n참고: --start 는 글로벌 user 서비스에 즉시 일괄 적용되지 않습니다.")
@@ -1084,10 +1201,12 @@ def handle_install_as_global_user_service(
 def handle_uninstall_as_global_user_service(apprunx: str) -> int:
     """--install-as-global-user-service 로 생성된 global user 서비스를 비활성화·삭제."""
     app_id   = libapprun.get_bundle_id(apprunx)
-    svc_name = f"{_sanitize_service_name(app_id)}.service"
-    dest     = SYSTEMD_GLOBAL_USER_UNIT_DIR / svc_name
+    svc_base = _sanitize_service_name(app_id)
+    svc_name = f"{svc_base}.service"
+    stored_bundle, stored_unit = _stored_service_paths(GLOBAL_USER_SERVICE_STORE_DIR, svc_base)
+    dest = SYSTEMD_GLOBAL_USER_UNIT_DIR / svc_name
 
-    if not dest.exists():
+    if not (dest.exists() or dest.is_symlink() or stored_unit.exists()):
         print(f"Error: 서비스 파일이 존재하지 않습니다: {dest}", file=sys.stderr)
         return 1
 
@@ -1098,11 +1217,13 @@ def handle_uninstall_as_global_user_service(apprunx: str) -> int:
     if os.geteuid() == 0:
         subprocess.run(["systemctl", "--global", "disable", svc_name],
                        capture_output=True)
-        dest.unlink()
+        _remove_paths([dest, stored_unit, stored_bundle])
     else:
         script = (
             f"systemctl --global disable {shlex.quote(svc_name)}; "
-            f"rm -f {shlex.quote(str(dest))}"
+            f"rm -f {shlex.quote(str(dest))} "
+            f"{shlex.quote(str(stored_unit))} "
+            f"{shlex.quote(str(stored_bundle))}"
         )
         if not _run_privileged(script):
             return 1
@@ -1139,12 +1260,13 @@ def handle_uninstall_services(apprunx: str) -> int:
     removed = []
     for svc_name in service_files:
         dest = SYSTEMD_UNIT_DIR / svc_name
-        if not dest.exists():
+        stored_unit = SYSTEM_SERVICE_STORE_DIR / svc_name
+        if not (dest.exists() or dest.is_symlink() or stored_unit.exists()):
             print(f"  건너뜀 (미설치): {svc_name}")
             continue
 
         _systemctl_stop_disable(svc_name)
-        _remove_unit_file(dest)
+        _remove_paths([dest, stored_unit], use_privilege=True)
         removed.append(svc_name)
         print(f"  제거됨: {svc_name}")
 
@@ -1163,18 +1285,23 @@ def handle_uninstall_as_service(apprunx: str, user: str | None) -> int:
     resolved_user = real_user if user is None else user
     user_mode     = (resolved_user == real_user)
 
-    svc_name = f"{_sanitize_service_name(app_id)}.service"
+    svc_base = _sanitize_service_name(app_id)
+    svc_name = f"{svc_base}.service"
 
     if user_mode:
+        store_dir = _user_service_store_dir(resolved_user)
         dest = (
             Path(f"~{resolved_user}").expanduser()
             / ".config" / "systemd" / "user"
             / svc_name
         )
     else:
+        store_dir = SYSTEM_SERVICE_STORE_DIR
         dest = SYSTEMD_UNIT_DIR / svc_name
 
-    if not dest.exists():
+    stored_bundle, stored_unit = _stored_service_paths(store_dir, svc_base)
+
+    if not (dest.exists() or dest.is_symlink() or stored_unit.exists()):
         print(f"Error: 서비스 파일이 존재하지 않습니다: {dest}", file=sys.stderr)
         return 1
 
@@ -1183,7 +1310,7 @@ def handle_uninstall_as_service(apprunx: str, user: str | None) -> int:
         if user_env is None:
             return 1
         _systemctl_stop_disable(svc_name, user_mode=True, env=user_env)
-        dest.unlink()
+        _remove_paths([dest, stored_unit, stored_bundle])
         _systemctl_daemon_reload(user_mode=True, env=user_env)
     else:
         if not _can_escalate():
@@ -1192,7 +1319,9 @@ def handle_uninstall_as_service(apprunx: str, user: str | None) -> int:
         if not _run_privileged(
                 f"systemctl stop {svc_name}; "
                 f"systemctl disable {svc_name}; "
-                f"rm -f {dest}; "
+                f"rm -f {shlex.quote(str(dest))} "
+                f"{shlex.quote(str(stored_unit))} "
+                f"{shlex.quote(str(stored_bundle))}; "
                 f"systemctl daemon-reload"
         ):
             return 1
@@ -1299,7 +1428,7 @@ def _remove_unit_file(path: Path) -> None:
     if os.geteuid() == 0:
         path.unlink(missing_ok=True)
     else:
-        _run_privileged(f"rm -f {path}")
+        _run_privileged(f"rm -f {shlex.quote(str(path))}")
 
 # ==============================================================================
 # 도움말
@@ -1332,7 +1461,8 @@ flags 가 있으면 해당 작업을 수행하고 종료합니다.
 
 서비스 관리:
     --install-services          번들 내 services/*.service 파일을
-                                /etc/systemd/system/ 에 설치
+                                /usr/share/services.apprd/system 에 복사 후
+                                /etc/systemd/system/ 에 링크
                                 --enable: [추가 옵션] 설치 과정에서 자동으로 활성화
                                 --start : [추가 옵션] 설치 과정에서 자동으로 시작 (자동으로 활성화 트리거)
 
@@ -1349,7 +1479,8 @@ flags 가 있으면 해당 작업을 수행하고 종료합니다.
                                 --start : [추가 옵션] 설치 과정에서 자동으로 시작 (자동으로 활성화 트리거)
 
     --install-as-global-user-service[=<type>,<after>,<before>]
-                                /etc/systemd/user 에 global user 서비스를 생성
+                                /usr/share/services.apprd/global 에 복사 후
+                                /etc/systemd/user 에 global user 서비스를 링크
                                   type 생략 시 simple
                                   --enable: systemctl --global enable 수행
 
