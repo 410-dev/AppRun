@@ -705,6 +705,123 @@ class AppContext:
             print("Failed to uninstall service.", file=sys.stderr)
             print(e.stderr, file=sys.stderr)
 
+    def install_as_gui_startup(
+        self,
+        globally: bool = False,
+        user: str = None,
+        no_interaction: bool = False,
+        apprun_args: list[str] | str = None,
+        run_args: list[str] | str = None,
+    ) -> bool:
+        """AppRun 번들을 GUI 로그인 시작 프로그램으로 등록하는 헬퍼.
+        명령 실행 방법
+        apprun --install-as-gui-startup=user --runarg=<arg> --user=<user> <번들 파일>
+        apprun --install-as-gui-startup=global --apprunarg=<arg> <번들 파일>
+        """
+        import subprocess
+        import sys
+        import shutil
+
+        username: str = self.username() if user is None else user
+        scope = "global" if globally else "user"
+        apprun_args = [apprun_args] if isinstance(apprun_args, str) else list(apprun_args or [])
+        run_args = [run_args] if isinstance(run_args, str) else list(run_args or [])
+
+        if not no_interaction:
+            if shutil.which("zenity"):
+                try:
+                    subprocess.run([
+                        "zenity", "--question",
+                        "--title=GUI 시작 프로그램 설치 확인",
+                        f"--text={self.id()} 앱을 {'모든 사용자' if globally else username}의 GUI 로그인 시 자동 실행되도록 등록하시겠습니까?"
+                    ], check=True)
+                except subprocess.CalledProcessError:
+                    print("GUI startup installation cancelled by user.")
+                    return False
+            else:
+                target = "all users" if globally else f"user '{username}'"
+                response = input(f"Do you want to register {self.id()} as a GUI startup app for {target}? (y/N): ")
+                if response.strip().lower() != 'y':
+                    print("GUI startup installation cancelled by user.")
+                    return False
+
+        print(f"Installing GUI startup entry ({scope})...")
+        cmd = ["apprun", f"--install-as-gui-startup={scope}"]
+        for arg in apprun_args:
+            cmd.append(f"--apprunarg={arg}")
+        for arg in run_args:
+            cmd.append(f"--runarg={arg}")
+        if not globally:
+            cmd.append(f"--user={username}")
+        cmd.append(self._bundle_path)
+
+        try:
+            result = subprocess.run(cmd, check=True, capture_output=True, text=True)
+        except subprocess.CalledProcessError as e:
+            print("Failed to install GUI startup entry.", file=sys.stderr)
+            print(e.stderr, file=sys.stderr)
+            return False
+
+        try:
+            if shutil.which("notify-send"):
+                subprocess.run(["notify-send", "GUI 시작 프로그램 등록됨", f"{self.id()} 앱이 GUI 로그인 시 실행됩니다."])
+        except:
+            pass
+
+        print("GUI startup entry installed successfully.")
+        print(result.stdout)
+        return True
+
+    def uninstall_as_gui_startup(self, globally: bool = False, user: str = None) -> bool:
+        """AppRun 번들을 GUI 로그인 시작 프로그램에서 제거하는 헬퍼."""
+        import subprocess
+        import sys
+        import shutil
+
+        username: str = self.username() if user is None else user
+        scope = "global" if globally else "user"
+
+        cmd = ["apprun", f"--uninstall-as-gui-startup={scope}"]
+        if not globally:
+            cmd.append(f"--user={username}")
+        cmd.append(self._bundle_path)
+
+        try:
+            result = subprocess.run(cmd, check=True, capture_output=True, text=True)
+        except subprocess.CalledProcessError as e:
+            print("Failed to uninstall GUI startup entry.", file=sys.stderr)
+            print(e.stderr, file=sys.stderr)
+            return False
+
+        try:
+            if shutil.which("notify-send"):
+                subprocess.run(["notify-send", "GUI 시작 프로그램 등록 해제", f"{self.id()} 앱이 GUI 로그인 자동 실행에서 해제됐습니다."])
+        except:
+            pass
+
+        print("GUI startup entry uninstalled successfully.")
+        print(result.stdout)
+        return True
+
+    def uninstall_gui_startup(self, globally: bool = False, user: str = None) -> bool:
+        return self.uninstall_as_gui_startup(globally=globally, user=user)
+
+    def install_gui_startup(
+        self,
+        globally: bool = False,
+        user: str = None,
+        no_interaction: bool = False,
+        apprun_args: list[str] | str = None,
+        run_args: list[str] | str = None,
+    ) -> bool:
+        return self.install_as_gui_startup(
+            globally=globally,
+            user=user,
+            no_interaction=no_interaction,
+            apprun_args=apprun_args,
+            run_args=run_args,
+        )
+
     def install_as_service(self, svc_type: str, user: str = None, after: list[str] = None, before: list[str] = None, no_interaction: bool = False, enable: bool = True, start: bool = True) -> bool:
         """AppRun 번들을 시스템 서비스로 설치하는 헬퍼.
         명령 실행 방법

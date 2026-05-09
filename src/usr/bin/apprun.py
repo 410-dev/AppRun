@@ -30,6 +30,8 @@ SYSTEMD_GLOBAL_USER_UNIT_DIR = Path("/etc/systemd/user")
 SERVICE_STORE_ROOT = Path("/usr/share/services.apprd")
 SYSTEM_SERVICE_STORE_DIR = SERVICE_STORE_ROOT / "system"
 GLOBAL_USER_SERVICE_STORE_DIR = SERVICE_STORE_ROOT / "global"
+GLOBAL_GUI_STARTUP_DIR = Path("/etc/xdg/autostart")
+GLOBAL_GUI_STARTUP_STORE_DIR = SERVICE_STORE_ROOT / "gui-startup" / "global"
 
 
 # ==============================================================================
@@ -928,6 +930,98 @@ def _stored_service_paths(store_dir: Path, svc_name: str) -> tuple[Path, Path]:
     return store_dir / f"{svc_name}.apprunx", store_dir / f"{svc_name}.service"
 
 
+def _user_gui_startup_store_dir(username: str) -> Path:
+    return Path(f"~{username}").expanduser() / ".local" / "share" / "services.apprd" / "gui-startup"
+
+
+def _user_gui_startup_dir(username: str) -> Path:
+    return Path(f"~{username}").expanduser() / ".config" / "autostart"
+
+
+def _stored_gui_startup_paths(store_dir: Path, desktop_name: str) -> tuple[Path, Path]:
+    return store_dir / f"{desktop_name}.apprunx", store_dir / f"{desktop_name}.desktop"
+
+
+def _chown_to_user(path: Path, username: str) -> None:
+    """root 로 user 홈 내부에 만든 파일/디렉터리 소유권을 대상 user 로 맞춤."""
+    if os.geteuid() != 0:
+        return
+
+    try:
+        pw = pwd.getpwnam(username)
+    except KeyError:
+        return
+
+    home = Path(pw.pw_dir)
+    chain: list[Path] = []
+    current = path
+    while current != home and current.parent != current:
+        chain.append(current)
+        current = current.parent
+
+    if current != home:
+        chain = [path]
+
+    for item in reversed(chain):
+        if item.exists() or item.is_symlink():
+            try:
+                os.chown(item, pw.pw_uid, pw.pw_gid, follow_symlinks=False)
+            except OSError:
+                pass
+
+
+def _desktop_value(value: object) -> str:
+    return str(value).replace("\n", " ").replace("\r", " ").strip()
+
+
+def _desktop_exec_quote_arg(value: str | Path) -> str:
+    """
+    Quote one argument for a Desktop Entry Exec line.
+    Desktop Exec is not a shell command, but quoted args preserve whitespace and
+    literal quote/backslash characters for the desktop launcher tokenizer.
+    """
+    text = str(value)
+    if text and not re.search(r'[\s"\\]', text):
+        return text
+    return '"' + text.replace("\\", "\\\\").replace('"', '\\"') + '"'
+
+
+def _format_desktop_exec(args: list[str | Path]) -> str:
+    return " ".join(_desktop_exec_quote_arg(arg) for arg in args)
+
+
+def _build_gui_startup_desktop(
+    apprunx: str,
+    stored_bundle: Path,
+    app_id: str,
+    apprun_args: list[str] | None = None,
+    run_args: list[str] | None = None,
+) -> bytes:
+    meta = libapprun.get_bundle_meta(apprunx)
+    name = _desktop_value(meta.get("name", app_id)) or app_id
+    comment = _desktop_value(meta.get("description", ""))
+    exec_args: list[str | Path] = [
+        "/usr/bin/apprun3",
+        *(apprun_args or []),
+        stored_bundle,
+        *(run_args or []),
+    ]
+
+    lines = [
+        "[Desktop Entry]",
+        "Type=Application",
+        f"Name={name}",
+        f"Comment={comment}",
+        f"Exec={_format_desktop_exec(exec_args)}",
+        f"Icon={_desktop_value(app_id)}",
+        "Terminal=false",
+        "Hidden=false",
+        "X-GNOME-Autostart-enabled=true",
+        f"StartupWMClass={_desktop_value(app_id)}",
+    ]
+    return ("\n".join(lines) + "\n").encode("utf-8")
+
+
 def _replace_symlink(link_path: Path, target_path: Path) -> None:
     if link_path.exists() or link_path.is_symlink():
         link_path.unlink()
@@ -1233,6 +1327,156 @@ def handle_uninstall_as_global_user_service(apprunx: str) -> int:
     print(f"실행 중인 인스턴스는 systemctl --user stop {svc_name} 로 중지할 수 있습니다.")
     return 0
 
+
+# ==============================================================================
+# GUI autostart 생성/제거 핸들러
+# ==============================================================================
+
+def _normalize_gui_startup_scope(scope: str | None) -> str | None:
+    resolved = "user" if scope is None else scope.strip().lower()
+    if resolved not in ("user", "global"):
+        print("Error: --install-as-gui-startup 값은 user 또는 global 이어야 합니다.", file=sys.stderr)
+        print("사용법: --install-as-gui-startup[=user|global]", file=sys.stderr)
+        return None
+    return resolved
+
+
+def _parse_startup_args(raw: str, option_name: str) -> list[str]:
+    """
+    Compact argument strings accept shell-like quoting.
+    If no whitespace is present and commas are used, treat commas as separators
+    for convenience: --runargs-start=--a=x,--b=y,positional
+    """
+    value = raw.strip()
+    if not value:
+        return []
+
+    if "," in value and not any(ch.isspace() for ch in value):
+        return [part for part in value.split(",") if part]
+
+    try:
+        return shlex.split(value)
+    except ValueError as exc:
+        print(f"Error: {option_name} 파싱 실패: {exc}", file=sys.stderr)
+        sys.exit(2)
+
+
+def handle_install_as_gui_startup(
+    apprunx: str,
+    scope: str | None,
+    user: str | None,
+    apprun_args: list[str] | None = None,
+    run_args: list[str] | None = None,
+) -> int:
+    """
+    .desktop autostart 엔트리를 생성.
+    - user   →  ~/.config/autostart
+    - global →  /etc/xdg/autostart
+    """
+    resolved_scope = _normalize_gui_startup_scope(scope)
+    if resolved_scope is None:
+        return 1
+
+    app_id       = libapprun.get_bundle_id(apprunx)
+    desktop_base = _sanitize_service_name(app_id)
+    desktop_name = f"{desktop_base}.desktop"
+    apprunx_abs  = str(Path(apprunx).resolve())
+
+    if resolved_scope == "global":
+        if os.geteuid() != 0:
+            return _reexec_privileged(apprunx)
+        store_dir = GLOBAL_GUI_STARTUP_STORE_DIR
+        dest_dir  = GLOBAL_GUI_STARTUP_DIR
+        owner_user = None
+    else:
+        real_user     = get_real_user()
+        resolved_user = real_user if user is None else user
+        if resolved_user != real_user and os.geteuid() != 0:
+            return _reexec_privileged(apprunx)
+        try:
+            pwd.getpwnam(resolved_user)
+        except KeyError:
+            print(f"Error: 사용자 '{resolved_user}'를 찾을 수 없습니다.", file=sys.stderr)
+            return 1
+        store_dir = _user_gui_startup_store_dir(resolved_user)
+        dest_dir  = _user_gui_startup_dir(resolved_user)
+        owner_user = resolved_user
+
+    stored_bundle, stored_desktop = _stored_gui_startup_paths(store_dir, desktop_base)
+    dest = dest_dir / desktop_name
+    desktop_bytes = _build_gui_startup_desktop(
+        apprunx,
+        stored_bundle,
+        app_id,
+        apprun_args=apprun_args,
+        run_args=run_args,
+    )
+
+    store_dir.mkdir(parents=True, exist_ok=True)
+    dest_dir.mkdir(parents=True, exist_ok=True)
+    shutil.copy2(apprunx_abs, stored_bundle)
+    stored_desktop.write_bytes(desktop_bytes)
+    shutil.copy2(stored_desktop, dest)
+    stored_bundle.chmod(0o644)
+    stored_desktop.chmod(0o644)
+    dest.chmod(0o644)
+
+    if owner_user is not None:
+        for path in (store_dir, dest_dir, stored_bundle, stored_desktop, dest):
+            _chown_to_user(path, owner_user)
+
+    print(f"GUI 시작 프로그램 설치 완료 ({resolved_scope}): {desktop_name}")
+    print(f"  번들:   {stored_bundle}")
+    print(f"  항목:   {dest}")
+    if apprun_args:
+        print(f"  AppRun 인자: {' '.join(shlex.quote(arg) for arg in apprun_args)}")
+    if run_args:
+        print(f"  실행 인자: {' '.join(shlex.quote(arg) for arg in run_args)}")
+    return 0
+
+
+def handle_uninstall_as_gui_startup(
+    apprunx: str,
+    scope: str | None,
+    user: str | None,
+) -> int:
+    """--install-as-gui-startup 로 생성된 .desktop autostart 엔트리를 제거."""
+    resolved_scope = _normalize_gui_startup_scope(scope)
+    if resolved_scope is None:
+        return 1
+
+    app_id       = libapprun.get_bundle_id(apprunx)
+    desktop_base = _sanitize_service_name(app_id)
+    desktop_name = f"{desktop_base}.desktop"
+
+    if resolved_scope == "global":
+        if os.geteuid() != 0:
+            return _reexec_privileged(apprunx)
+        store_dir = GLOBAL_GUI_STARTUP_STORE_DIR
+        dest = GLOBAL_GUI_STARTUP_DIR / desktop_name
+    else:
+        real_user     = get_real_user()
+        resolved_user = real_user if user is None else user
+        if resolved_user != real_user and os.geteuid() != 0:
+            return _reexec_privileged(apprunx)
+        try:
+            pwd.getpwnam(resolved_user)
+        except KeyError:
+            print(f"Error: 사용자 '{resolved_user}'를 찾을 수 없습니다.", file=sys.stderr)
+            return 1
+        store_dir = _user_gui_startup_store_dir(resolved_user)
+        dest = _user_gui_startup_dir(resolved_user) / desktop_name
+
+    stored_bundle, stored_desktop = _stored_gui_startup_paths(store_dir, desktop_base)
+
+    if not (dest.exists() or stored_desktop.exists() or stored_bundle.exists()):
+        print(f"Error: GUI 시작 프로그램 파일이 존재하지 않습니다: {dest}", file=sys.stderr)
+        return 1
+
+    _remove_paths([dest, stored_desktop, stored_bundle])
+    print(f"GUI 시작 프로그램 제거 완료 ({resolved_scope}): {desktop_name}")
+    return 0
+
 # ==============================================================================
 # 서비스 단순 제거 핸들러
 # ==============================================================================
@@ -1491,6 +1735,19 @@ flags 가 있으면 해당 작업을 수행하고 종료합니다.
     --uninstall-as-service      --install-as-service 로 생성된 서비스를
                                 중지·비활성화·삭제
 
+    --install-as-gui-startup[=user|global]
+                                GUI 로그인 시 실행되도록 .desktop autostart 항목 생성
+                                  user 생략 시 현재 사용자 ~/.config/autostart
+                                  --user=<사용자> 로 특정 사용자 지정 가능
+                                  global 은 /etc/xdg/autostart 에 생성
+                                  --apprunargs=<args> 는 apprun3 앞쪽 인자 추가
+                                  --runargs-start=<args> 는 번들 뒤 앱 실행 인자 추가
+                                  --apprunarg=<arg>, --runarg=<arg> 반복 가능
+
+    --uninstall-as-gui-startup[=user|global]
+                                --install-as-gui-startup 로 생성된
+                                .desktop autostart 항목 삭제
+
 기타:
     --help, -h                  이 도움말 출력
 
@@ -1504,6 +1761,9 @@ flags 가 있으면 해당 작업을 수행하고 종료합니다.
     apprun3 --install-as-service=oneshot,plymouth-quit-wait.service+systemd-user-sessions.service,network.target my-app.apprunx
     apprun3 --install-as-global-user-service=simple --enable my-app.apprunx
     apprun3 --uninstall-as-global-user-service my-app.apprunx
+    apprun3 --install-as-gui-startup=user my-app.apprunx
+    apprun3 --install-as-gui-startup=global my-app.apprunx
+    apprun3 --install-as-gui-startup --runargs-start=--arg1=x,--arg2=y,arg3 my-app.apprunx
 """
 
 
@@ -1561,7 +1821,32 @@ def parse_args(argv: list[str]):
             flags["install_as_global_user_service"] = arg[len("--install-as-global-user-service="):]
         elif arg == "--uninstall-as-global-user-service":
             flags["uninstall_as_global_user_service"] = True
-        elif arg.startswith("--user=") and ("install_as_service" in flags or "uninstall_as_service" in flags):
+        elif arg == "--install-as-gui-startup":
+            flags["install_as_gui_startup"] = None
+        elif arg.startswith("--install-as-gui-startup="):
+            flags["install_as_gui_startup"] = arg[len("--install-as-gui-startup="):]
+        elif arg == "--uninstall-as-gui-startup":
+            flags["uninstall_as_gui_startup"] = None
+        elif arg.startswith("--uninstall-as-gui-startup="):
+            flags["uninstall_as_gui_startup"] = arg[len("--uninstall-as-gui-startup="):]
+        elif arg.startswith("--apprunargs="):
+            flags.setdefault("gui_startup_apprun_args", []).extend(
+                _parse_startup_args(arg[len("--apprunargs="):], "--apprunargs")
+            )
+        elif arg.startswith("--apprunarg="):
+            flags.setdefault("gui_startup_apprun_args", []).append(arg[len("--apprunarg="):])
+        elif arg.startswith("--runargs-start="):
+            flags.setdefault("gui_startup_run_args", []).extend(
+                _parse_startup_args(arg[len("--runargs-start="):], "--runargs-start")
+            )
+        elif arg.startswith("--runarg="):
+            flags.setdefault("gui_startup_run_args", []).append(arg[len("--runarg="):])
+        elif arg.startswith("--user=") and (
+            "install_as_service" in flags
+            or "uninstall_as_service" in flags
+            or "install_as_gui_startup" in flags
+            or "uninstall_as_gui_startup" in flags
+        ):
             flags["service_install_user"] = arg[len("--user="):]
         elif arg == "--uninstall-services":
             flags["uninstall_services"] = True
@@ -1580,6 +1865,14 @@ def parse_args(argv: list[str]):
     has_to   = "extract_file_to"   in flags
     if has_from != has_to:
         print("Error: --extract-file-from 과 --extract-file-to 는 함께 사용해야 합니다.", file=sys.stderr)
+        sys.exit(2)
+
+    has_gui_startup_args = (
+        "gui_startup_apprun_args" in flags
+        or "gui_startup_run_args" in flags
+    )
+    if has_gui_startup_args and "install_as_gui_startup" not in flags:
+        print("Error: --apprunargs/--runargs-start 는 --install-as-gui-startup 와 함께 사용해야 합니다.", file=sys.stderr)
         sys.exit(2)
 
     if not remaining:
@@ -1619,6 +1912,16 @@ def main():
             sys.exit(handle_install_as_global_user_service(apprunx, flags["install_as_global_user_service"], flags.get("service_install_and_enable", False), flags.get("service_install_and_start", False)))
         if "uninstall_as_global_user_service" in flags:
             sys.exit(handle_uninstall_as_global_user_service(apprunx))
+        if "install_as_gui_startup" in flags:
+            sys.exit(handle_install_as_gui_startup(
+                apprunx,
+                flags["install_as_gui_startup"],
+                flags.get("service_install_user"),
+                flags.get("gui_startup_apprun_args"),
+                flags.get("gui_startup_run_args"),
+            ))
+        if "uninstall_as_gui_startup" in flags:
+            sys.exit(handle_uninstall_as_gui_startup(apprunx, flags["uninstall_as_gui_startup"], flags.get("service_install_user")))
         if "uninstall_services"   in flags: sys.exit(handle_uninstall_services(apprunx))
         if "uninstall_as_service" in flags: sys.exit(handle_uninstall_as_service(apprunx, flags.get("service_install_user")))
 
