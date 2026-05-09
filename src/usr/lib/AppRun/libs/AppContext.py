@@ -14,6 +14,7 @@ import tempfile
 
 class ProcessAlreadyRunningError(Exception):
     """동일한 id로 이미 프로세스가 실행 중일 때 발생"""
+
     def __init__(self, lock_id: str, existing_pid: int):
         self.lock_id = lock_id
         self.existing_pid = existing_pid
@@ -704,8 +705,7 @@ class AppContext:
             print("Failed to uninstall service.", file=sys.stderr)
             print(e.stderr, file=sys.stderr)
 
-
-    def install_as_service(self, svc_type: str, user: str = None, after: list[str] = None, before: list[str] = None, no_interaction: bool = False) -> bool:
+    def install_as_service(self, svc_type: str, user: str = None, after: list[str] = None, before: list[str] = None, no_interaction: bool = False, enable: bool = True, start: bool = True) -> bool:
         """AppRun 번들을 시스템 서비스로 설치하는 헬퍼.
         명령 실행 방법
         # apprun --install-as-service=<type>,<after>+<after>+<after>....,<before>+<before>+<before>....
@@ -744,12 +744,8 @@ class AppContext:
         service_bundle_path = os.path.join(services_dir, os.path.basename(self._bundle_path))
         print(f"Copying {self._bundle_path} ----->>>> {service_bundle_path}")
 
-        # Format 1, 2
-        if os.path.isdir(self._bundle_path):
-            shutil.copytree(self._bundle_path, service_bundle_path, dirs_exist_ok=True)
-
         # Format 3
-        elif os.path.isfile(self._bundle_path):
+        if os.path.isfile(self._bundle_path):
             shutil.copy2(self._bundle_path, service_bundle_path)
 
         # Not found
@@ -767,6 +763,10 @@ class AppContext:
         print(f"Installing service for user '{username}' with type '{svc_type}'...")
         cmd = ["apprun", f"--install-as-service={svc_type},{'+'.join(after_deps)},{'+'.join(before_deps)}", f"--user={username}", service_bundle_path]
 
+        # enable 옵션이 True 면 --enable 플래그 추가
+        if enable:
+            cmd.append("--enable")
+
         # 실행
         try:
             result = subprocess.run(cmd, check=True, capture_output=True, text=True)
@@ -774,6 +774,24 @@ class AppContext:
             print("Failed to install service.", file=sys.stderr)
             print(e.stderr, file=sys.stderr)
             return False
+
+        # If start is requested, start the service immediately
+        if start:
+            # Daemon reload
+            try:
+                result = subprocess.run(["systemctl", "--user", "daemon-reload"], check=True, capture_output=True, text=True)
+            except subprocess.CalledProcessError as e:
+                print("Failed to reload user systemd daemon.", file=sys.stderr)
+                print(e.stderr, file=sys.stderr)
+                return False
+            # Start the service
+            service_name = f"{self.id()}.service"
+            try:
+                result = subprocess.run(["systemctl", "--user", "start", service_name], check=True, capture_output=True, text=True)
+            except subprocess.CalledProcessError as e:
+                print(f"Failed to start global user service '{service_name}'.", file=sys.stderr)
+                print(e.stderr, file=sys.stderr)
+                return False
 
         try:
             if shutil.which("notify-send"):
@@ -786,8 +804,7 @@ class AppContext:
         print(result.stdout)
         return True
 
-
-    def install_as_global_user(self, svc_type: str = "simple", after: list[str] = None, before: list[str] = None, no_interaction: bool = False, enable: bool = True) -> bool:
+    def install_as_global_user(self, svc_type: str = "simple", after: list[str] = None, before: list[str] = None, no_interaction: bool = False, enable: bool = True, start: bool = True) -> bool:
         """AppRun 번들을 systemd global user 서비스로 설치하는 헬퍼.
         명령 실행 방법
         # apprun --install-as-global-user-service=<type>,<after>+<after>+<after>....,<before>+<before>+<before>.... --enable
@@ -833,6 +850,24 @@ class AppContext:
             print(e.stderr, file=sys.stderr)
             return False
 
+        # If start is requested, start the service immediately
+        if start:
+            # Daemon reload
+            try:
+                result = subprocess.run(["systemctl", "--user", "daemon-reload"], check=True, capture_output=True, text=True)
+            except subprocess.CalledProcessError as e:
+                print("Failed to reload user systemd daemon.", file=sys.stderr)
+                print(e.stderr, file=sys.stderr)
+                return False
+            # Start the service
+            service_name = f"{self.id()}.service"
+            try:
+                result = subprocess.run(["systemctl", "--user", "start", service_name], check=True, capture_output=True, text=True)
+            except subprocess.CalledProcessError as e:
+                print(f"Failed to start global user service '{service_name}'.", file=sys.stderr)
+                print(e.stderr, file=sys.stderr)
+                return False
+
         try:
             if shutil.which("notify-send"):
                 subprocess.run(["notify-send", "글로벌 사용자 서비스 등록됨", f"{self.id()} 서비스가 모든 사용자의 user service 로 등록됐습니다."])
@@ -842,7 +877,6 @@ class AppContext:
         print("Global user service installed successfully.")
         print(result.stdout)
         return True
-
 
     def is_user_in_group(self, groupname):
         try:
@@ -865,7 +899,6 @@ class AppContext:
 
     def is_user_in_group_or_privileged(self, groupname):
         return self.is_user_in_group(groupname) or self.ensure_privileged(False)
-
 
     def __str__(self):
         return (
