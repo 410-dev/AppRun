@@ -710,6 +710,7 @@ class AppContext:
         globally: bool = False,
         user: str = None,
         no_interaction: bool = False,
+        start: bool = False,
         apprun_args: list[str] | str = None,
         run_args: list[str] | str = None,
     ) -> bool:
@@ -747,6 +748,8 @@ class AppContext:
 
         print(f"Installing GUI startup entry ({scope})...")
         cmd = ["apprun", f"--install-as-gui-startup={scope}"]
+        if start:
+            cmd.append("--start")
         for arg in apprun_args:
             cmd.append(f"--apprunarg={arg}")
         for arg in run_args:
@@ -811,6 +814,7 @@ class AppContext:
         globally: bool = False,
         user: str = None,
         no_interaction: bool = False,
+        start: bool = False,
         apprun_args: list[str] | str = None,
         run_args: list[str] | str = None,
     ) -> bool:
@@ -818,6 +822,7 @@ class AppContext:
             globally=globally,
             user=user,
             no_interaction=no_interaction,
+            start=start,
             apprun_args=apprun_args,
             run_args=run_args,
         )

@@ -990,6 +990,19 @@ def _format_desktop_exec(args: list[str | Path]) -> str:
     return " ".join(_desktop_exec_quote_arg(arg) for arg in args)
 
 
+def _gui_startup_exec_args(
+    stored_bundle: Path,
+    apprun_args: list[str] | None = None,
+    run_args: list[str] | None = None,
+) -> list[str | Path]:
+    return [
+        "/usr/bin/apprun3",
+        *(apprun_args or []),
+        stored_bundle,
+        *(run_args or []),
+    ]
+
+
 def _build_gui_startup_desktop(
     apprunx: str,
     stored_bundle: Path,
@@ -1000,12 +1013,7 @@ def _build_gui_startup_desktop(
     meta = libapprun.get_bundle_meta(apprunx)
     name = _desktop_value(meta.get("name", app_id)) or app_id
     comment = _desktop_value(meta.get("description", ""))
-    exec_args: list[str | Path] = [
-        "/usr/bin/apprun3",
-        *(apprun_args or []),
-        stored_bundle,
-        *(run_args or []),
-    ]
+    exec_args = _gui_startup_exec_args(stored_bundle, apprun_args, run_args)
 
     lines = [
         "[Desktop Entry]",
@@ -1361,10 +1369,65 @@ def _parse_startup_args(raw: str, option_name: str) -> list[str]:
         sys.exit(2)
 
 
+def _gui_startup_launch_env(username: str | None = None) -> dict[str, str]:
+    env = os.environ.copy()
+    if username is None:
+        return env
+
+    try:
+        pw = pwd.getpwnam(username)
+    except KeyError:
+        return env
+
+    env["HOME"] = pw.pw_dir
+    env["USER"] = username
+    env["LOGNAME"] = username
+
+    runtime_dir = env.get("XDG_RUNTIME_DIR") or f"/run/user/{pw.pw_uid}"
+    if Path(runtime_dir).is_dir():
+        env["XDG_RUNTIME_DIR"] = runtime_dir
+        bus = Path(runtime_dir) / "bus"
+        if not env.get("DBUS_SESSION_BUS_ADDRESS") and bus.exists():
+            env["DBUS_SESSION_BUS_ADDRESS"] = f"unix:path={bus}"
+
+    return env
+
+
+def _start_gui_startup_exec(exec_args: list[str | Path], username: str | None = None) -> bool:
+    cmd = [str(arg) for arg in exec_args]
+    env = _gui_startup_launch_env(username)
+
+    if username is not None:
+        try:
+            pw = pwd.getpwnam(username)
+        except KeyError:
+            print(f"Error: 사용자 '{username}'를 찾을 수 없습니다.", file=sys.stderr)
+            return False
+
+        if os.geteuid() == 0 and pw.pw_uid != 0:
+            if shutil.which("runuser"):
+                cmd = ["runuser", "-u", username, "--", *cmd]
+            elif shutil.which("sudo"):
+                cmd = ["sudo", "-u", username, *cmd]
+            else:
+                print("Warning: runuser/sudo 를 찾을 수 없어 root 권한으로 즉시 실행을 건너뜁니다.", file=sys.stderr)
+                return False
+
+    try:
+        subprocess.Popen(cmd, env=env, start_new_session=True)
+    except OSError as exc:
+        print(f"Error: GUI 시작 프로그램 즉시 실행 실패: {exc}", file=sys.stderr)
+        return False
+
+    print(f"GUI 시작 프로그램 즉시 실행: {_format_desktop_exec(exec_args)}")
+    return True
+
+
 def handle_install_as_gui_startup(
     apprunx: str,
     scope: str | None,
     user: str | None,
+    start: bool,
     apprun_args: list[str] | None = None,
     run_args: list[str] | None = None,
 ) -> int:
@@ -1383,6 +1446,7 @@ def handle_install_as_gui_startup(
     apprunx_abs  = str(Path(apprunx).resolve())
 
     if resolved_scope == "global":
+        launch_user = get_real_user()
         if os.geteuid() != 0:
             return _reexec_privileged(apprunx)
         store_dir = GLOBAL_GUI_STARTUP_STORE_DIR
@@ -1401,9 +1465,11 @@ def handle_install_as_gui_startup(
         store_dir = _user_gui_startup_store_dir(resolved_user)
         dest_dir  = _user_gui_startup_dir(resolved_user)
         owner_user = resolved_user
+        launch_user = resolved_user
 
     stored_bundle, stored_desktop = _stored_gui_startup_paths(store_dir, desktop_base)
     dest = dest_dir / desktop_name
+    exec_args = _gui_startup_exec_args(stored_bundle, apprun_args, run_args)
     desktop_bytes = _build_gui_startup_desktop(
         apprunx,
         stored_bundle,
@@ -1432,6 +1498,10 @@ def handle_install_as_gui_startup(
         print(f"  AppRun 인자: {' '.join(shlex.quote(arg) for arg in apprun_args)}")
     if run_args:
         print(f"  실행 인자: {' '.join(shlex.quote(arg) for arg in run_args)}")
+
+    if start and not _start_gui_startup_exec(exec_args, launch_user):
+        return 1
+
     return 0
 
 
@@ -1743,6 +1813,7 @@ flags 가 있으면 해당 작업을 수행하고 종료합니다.
                                   --apprunargs=<args> 는 apprun3 앞쪽 인자 추가
                                   --runargs-start=<args> 는 번들 뒤 앱 실행 인자 추가
                                   --apprunarg=<arg>, --runarg=<arg> 반복 가능
+                                  --start: 등록 직후 생성된 Exec 명령을 즉시 실행
 
     --uninstall-as-gui-startup[=user|global]
                                 --install-as-gui-startup 로 생성된
@@ -1764,6 +1835,7 @@ flags 가 있으면 해당 작업을 수행하고 종료합니다.
     apprun3 --install-as-gui-startup=user my-app.apprunx
     apprun3 --install-as-gui-startup=global my-app.apprunx
     apprun3 --install-as-gui-startup --runargs-start=--arg1=x,--arg2=y,arg3 my-app.apprunx
+    apprun3 --install-as-gui-startup --start my-app.apprunx
 """
 
 
@@ -1917,6 +1989,7 @@ def main():
                 apprunx,
                 flags["install_as_gui_startup"],
                 flags.get("service_install_user"),
+                flags.get("service_install_and_start", False),
                 flags.get("gui_startup_apprun_args"),
                 flags.get("gui_startup_run_args"),
             ))
