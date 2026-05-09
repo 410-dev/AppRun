@@ -56,6 +56,11 @@ ln -fs "/usr/bin/apprun-package" "/usr/bin/apprun3-package"
 
 /usr/bin/apprun3 --install-as-service=simple,graphical.target+systemd-user-sessions.service /usr/lib/AppRun/AppRunDropInService.apprunx
 
+# Link AppContext to global python dist lib
+if [ -f "/usr/lib/python3/dist-packages/AppContext.py" ]; then
+	rm -f "/usr/lib/python3/dist-packages/AppContext.py"
+fi
+ln -fs "/usr/lib/AppRun/libs/AppContext.py" "/usr/lib/python3/dist-packages/AppContext.py"
 
 # Update the MIME database and icon caches, and clear thumbnail cache
 set +e
