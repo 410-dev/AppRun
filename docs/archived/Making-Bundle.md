@@ -1,5 +1,7 @@
 # 번들 만들기
 
+> Archived: 이 문서는 Format 1/2 시대의 레거시 번들 구조를 기록하기 위해 보관되어 있습니다. AppRun 3.2.0 부터 Format 1 과 Format 2 는 완전히 deprecated 되었으며, 신규 번들은 [Format 3 문서](../format-3.md)에 따라 `.apprunx` 로 제작해야 합니다.
+
 이 문서는 AppRun 구조의 애플리케이션 번들을 만드는 방법을 서술합니다.
 
 ## 패키지 기본 구조

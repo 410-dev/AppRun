@@ -1,4 +1,4 @@
-# AppRun Format 3 Documentation
+# AppRun 3.2.0 Format 3 Documentation
 
 ---
 
@@ -19,12 +19,15 @@
 
 AppRun 은 리눅스용 애플리케이션 번들 프레임워크입니다. macOS 의 `.app` 형식에서 영감을 받아, 앱 실행에 필요한 모든 파일을 하나의 번들로 묶고 더블클릭으로 실행할 수 있게 합니다.
 
-**Format 3** 은 AppRun 의 세 번째 번들 포맷으로, 이전 포맷과의 주요 차이점은 다음과 같습니다.
+**Format 3** 은 AppRun 3.x 의 현재 번들 포맷입니다. AppRun 3.2.0 부터 Format 1 과 Format 2 는 완전히 deprecated 되었으며, 신규 번들 제작과 배포는 `.apprunx` 기반 Format 3 만 대상으로 합니다.
+
+이전 포맷과의 주요 차이점은 다음과 같습니다.
 
 | 항목 | Format 1/2 | Format 3 |
 |------|-----------|---------|
+| 상태 | 3.2.0 부터 deprecated | 현재 지원 포맷 |
 | 번들 형태 | 디렉터리 (`.apprun`) | squashfs 압축 파일 (`.apprunx`) |
-| 실행 방법 | `apprun <dir>` 만 가능 | 더블클릭 또는 `apprun3 <file>` |
+| 실행 방법 | 레거시 전용 | 더블클릭 또는 `apprun3 <file>` |
 | 메타데이터 | 개별 파일 | `meta.json` 통합 |
 | 언어 지원 | Python, Java, Bash, Binary | + `EntryPoint` 로 모든 언어 |
 | 체크섬 | md5 | sha256 |
@@ -292,13 +295,13 @@ my-node-app/
 
 ### libs 파일 (PYTHONPATH 주입)
 
-시스템에 설치된 Python 라이브러리를 특정 경로에서 불러와야 할 때 사용합니다. `AppRunMeta/libs` 파일에 키:값 쌍으로 작성합니다.
+시스템에 설치된 Python 라이브러리를 특정 경로에서 불러와야 할 때 사용합니다. `AppRunMeta/libs` 파일에 Collection ID 또는 실제 경로를 `:` 로 연결해 작성합니다.
 
 ```
-PYPATH:/usr/lib/python3/dist-packages
+system-site:/opt/my-extra-python-libs
 ```
 
-`/usr/share/dictionaries/apprun-python/` 디렉터리의 JSON 파일들이 키를 실제 경로로 변환해 `PYTHONPATH` 에 주입합니다.
+`/usr/share/dictionaries/apprun-python/` 디렉터리의 JSON 파일들이 Collection ID 를 실제 경로로 치환하고, 결과 문자열을 `PYTHONPATH` 에 주입합니다.
 
 ---
 
@@ -316,11 +319,12 @@ flags 없이 실행하면 번들을 실행합니다. flags 가 있으면 해당 
 |--------|------|
 | `apprun3 app.apprunx` | 번들 실행 |
 | `apprun3 --id app.apprunx` | 번들 ID 출력 |
-| `apprun3 --is-format=3 app.apprunx` | Format 3 여부 출력 (`true`/`false`) |
+| `apprun3 --is-format3 app.apprunx` | Format 3 여부 출력 (`true`/`false`) |
 | `apprun3 --info app.apprunx` | 전체 메타데이터 출력 |
 | `apprun3 --info=name,version app.apprunx` | 특정 키만 출력 |
 | `apprun3 --box-path app.apprunx` | Box 경로 출력 |
 | `apprun3 --prepare app.apprunx` | 실행 환경 준비 (venv, 마운트 등) |
+| `apprun3 --register app.apprunx` | 실행 환경 준비 후 데스크톱 엔트리 등록 |
 | `apprun3 --extract-file-from=<내부경로> --extract-file-to=<대상경로> app.apprunx` | 번들 내 파일 추출 |
 
 #### 앱 인자 전달
@@ -370,6 +374,27 @@ apprun3-package ./my-app/ -o my-app-release.apprunx --prefer size
 
 ---
 
+### 서비스 및 시작 프로그램 등록
+
+AppRun 3.2.0 계열은 `.apprunx` 번들을 systemd 서비스나 GUI 시작 프로그램으로 등록할 수 있습니다.
+
+| 명령어 | 설명 |
+|--------|------|
+| `apprun3 --install-services [--enable] [--start] app.apprunx` | 번들 내부 `services/*.service` 를 system service 로 설치 |
+| `apprun3 --uninstall-services app.apprunx` | 번들 내부 service 파일에 해당하는 system service 제거 |
+| `apprun3 --install-as-service=<type>,<after>,<before> [--enable] [--start] app.apprunx` | 번들 실행용 service 파일을 생성해 설치 |
+| `apprun3 --uninstall-as-service app.apprunx` | `--install-as-service` 로 생성한 service 제거 |
+| `apprun3 --install-as-global-user-service[=<type>,<after>,<before>] [--enable] app.apprunx` | global user service 로 설치 |
+| `apprun3 --uninstall-as-global-user-service app.apprunx` | global user service 제거 |
+| `apprun3 --install-as-gui-startup[=user\|global] [--start] app.apprunx` | GUI 로그인 시작 프로그램 등록 |
+| `apprun3 --uninstall-as-gui-startup[=user\|global] app.apprunx` | GUI 시작 프로그램 등록 제거 |
+
+`<type>` 은 `simple`, `oneshot`, `forking`, `notify`, `idle` 중 하나입니다. `after` 와 `before` 는 systemd unit 이름을 `+` 로 연결해 여러 개 지정할 수 있습니다.
+
+GUI 시작 프로그램 등록 시 `--apprunarg=<arg>` / `--apprunargs=<args>` 는 `apprun3` 앞쪽 옵션을, `--runarg=<arg>` / `--runargs-start=<args>` 는 번들 뒤 앱 실행 인자를 추가합니다.
+
+---
+
 ## 7. 고급 기능
 
 ### Box 디렉터리
@@ -396,9 +421,9 @@ rm -rf ~/.local/apprun/boxes/<app-id>/
 
 ### 마운트 포인트
 
-실행 중인 번들은 `~/.local/apprun/mounts/<app-id>/` 에 마운트됩니다. 읽기 전용입니다. 실행이 완료되면 자동으로 언마운트됩니다.
+실행 중인 번들은 `~/.local/apprun/mounts/<app-id>.<random>/` 에 마운트됩니다. 읽기 전용입니다. 실행이 완료되면 자동으로 언마운트됩니다.
 
-마운트 해제 조건은 해당 위치에서 실행중인 모든 프로세스가 종료되어 카운트가 0이 되는 것입니다.
+마운트 해제 조건은 해당 위치에서 실행 중인 모든 프로세스가 종료되어 카운트가 0이 되는 것입니다.
 
 ```bash
 # 마운트 상태 확인
@@ -442,13 +467,15 @@ apprun3-package ./my-app-src/ -o my-app.apprunx
 
 ---
 
-### 하위 호환성
+### Format 1/2 deprecation
 
-AppRun Format 1/2 번들(`.apprun` 디렉터리)은 `apprun` 명령어로 계속 실행할 수 있습니다. `apprun` 명령어는 입력된 경로가 `.apprunx` 파일이면 자동으로 `apprun3` 으로 라우팅합니다.
+AppRun 3.2.0 부터 Format 1/2 번들(`.apprun` 디렉터리 기반 포맷)은 완전히 deprecated 되었습니다. `apprun` 과 `apprun-package` 명령 이름은 설치 호환성을 위해 남아 있을 수 있지만, 신규 문서와 기능은 `apprun3` / `apprun3-package` 및 `.apprunx` Format 3 를 기준으로 합니다.
+
+기존 Format 1/2 번들은 Format 3 프로젝트 구조로 옮긴 뒤 `apprun3-package` 로 재패키징하세요.
 
 ```bash
-apprun my-old-app.apprun    # Format 2, 기존 방식
-apprun my-new-app.apprunx   # Format 3, apprun3 으로 자동 라우팅
+apprun3-package ./my-app/ -o my-app.apprunx
+apprun3 my-app.apprunx
 ```
 
 ---
