@@ -32,6 +32,8 @@ SYSTEM_SERVICE_STORE_DIR = SERVICE_STORE_ROOT / "system"
 GLOBAL_USER_SERVICE_STORE_DIR = SERVICE_STORE_ROOT / "global"
 GLOBAL_GUI_STARTUP_DIR = Path("/etc/xdg/autostart")
 GLOBAL_GUI_STARTUP_STORE_DIR = SERVICE_STORE_ROOT / "gui-startup" / "global"
+PORTABLE_TARGETS = {"mount", "box"}
+INHERIT_TARGETS = {"venv", "data", "full"}
 
 
 # ==============================================================================
@@ -113,6 +115,105 @@ def _reexec_privileged(apprunx: str) -> int:
     return proc.returncode
 
 
+def _parse_option_list(value: str, valid: set[str], option_name: str) -> list[str]:
+    items = [item.strip().lower() for item in value.split(",") if item.strip()]
+    invalid = [item for item in items if item not in valid]
+    if invalid:
+        print(
+            f"Error: {option_name} 값이 올바르지 않습니다: {', '.join(invalid)}",
+            file=sys.stderr,
+        )
+        sys.exit(2)
+    return items
+
+
+def _meta_option_list(meta: dict, key: str, valid: set[str]) -> list[str]:
+    raw = meta.get(key, [])
+    if raw in (None, ""):
+        return []
+    if isinstance(raw, str):
+        raw = [raw]
+    if not isinstance(raw, list):
+        print(f"Warning: meta.json 의 {key} 는 배열이어야 합니다.", file=sys.stderr)
+        return []
+
+    values: list[str] = []
+    for item in raw:
+        if not isinstance(item, str):
+            print(f"Warning: meta.json 의 {key} 항목은 문자열이어야 합니다: {item}", file=sys.stderr)
+            continue
+        normalized = item.strip().lower()
+        if normalized not in valid:
+            print(f"Warning: meta.json 의 {key} 값을 무시합니다: {item}", file=sys.stderr)
+            continue
+        values.append(normalized)
+    return values
+
+
+def _normalize_inherit_modes(values: list[str]) -> set[str]:
+    modes = set(values)
+    if "full" in modes:
+        modes.update({"venv", "data"})
+        modes.discard("full")
+    return modes
+
+
+def _resolve_runtime_paths(apprunx: str, flags: dict) -> tuple[str, Path, Path, set[str], set[str]]:
+    app_id = libapprun.get_bundle_id(apprunx)
+    meta = libapprun.get_bundle_meta(apprunx)
+
+    portable_targets = set(flags.get("portable", []))
+    portable_targets.update(_meta_option_list(meta, "EnforcePortable", PORTABLE_TARGETS))
+
+    inherit_values = list(flags.get("inherit", []))
+    inherit_values.extend(_meta_option_list(meta, "EnforceInherit", INHERIT_TARGETS))
+    inherit_targets = _normalize_inherit_modes(inherit_values)
+    if inherit_targets:
+        portable_targets.add("box")
+
+    if "mount" in portable_targets:
+        mount_path = libapprun.get_portable_mount_path(apprunx, app_id)
+    else:
+        mount_path = libapprun.get_mount_path(app_id)
+
+    if "box" in portable_targets:
+        box_path = libapprun.get_portable_box_path(apprunx, app_id)
+    else:
+        box_path = libapprun.get_box_path(app_id)
+
+    return app_id, mount_path, box_path, portable_targets, inherit_targets
+
+
+def _copy_path(src: Path, dest: Path) -> None:
+    if src.is_dir():
+        shutil.copytree(src, dest, symlinks=True, dirs_exist_ok=True)
+    elif src.exists():
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(src, dest)
+
+
+def _copy_box_data(src_box: Path, dest_box: Path) -> None:
+    for item in src_box.iterdir():
+        if item.name in {"pyvenv", ".lock", ".run"}:
+            continue
+        _copy_path(item, dest_box / item.name)
+
+
+def _inherit_box(app_id: str, dest_box: Path, inherit_targets: set[str]) -> None:
+    if not inherit_targets:
+        return
+
+    src_box = libapprun.get_box_path(app_id)
+    if src_box.resolve() == dest_box.resolve() or not src_box.exists():
+        return
+
+    dest_box.mkdir(parents=True, exist_ok=True)
+    if "data" in inherit_targets:
+        _copy_box_data(src_box, dest_box)
+    if "venv" in inherit_targets:
+        _copy_path(src_box / "pyvenv", dest_box / "pyvenv")
+
+
 # ==============================================================================
 # Flag 핸들러
 # ==============================================================================
@@ -138,8 +239,8 @@ def handle_info(apprunx: str, keys: list[str] | None = None) -> int:
     return 0
 
 
-def handle_box_path(apprunx: str) -> int:
-    print(libapprun.get_box_path(libapprun.get_bundle_id(apprunx)))
+def handle_box_path(box: Path) -> int:
+    print(box)
     return 0
 
 
@@ -159,10 +260,14 @@ def handle_extract_file(apprunx: str, inner_path: str, dest: str) -> int:
 # Prepare 핸들러
 # ==============================================================================
 
-def handle_prepare(apprunx: str, mount_path: Path, register: bool, unmount: bool = True) -> int:
+def handle_prepare(apprunx: str, mount_path: Path, box: Path, register: bool, unmount: bool = True) -> int:
 
     app_id = libapprun.get_bundle_id(apprunx)
-    box    = libapprun.ensure_box(app_id)
+    box    = libapprun.ensure_box_path(box)
+    try:
+        (box / "source.path").write_text(str(Path(apprunx).resolve()))
+    except Exception as e:
+        print(f"Warning: 원본 번들 경로 저장 실패: {e}", file=sys.stderr)
 
     mount_path.mkdir(parents=True, exist_ok=True)
 
@@ -197,7 +302,7 @@ def handle_prepare(apprunx: str, mount_path: Path, register: bool, unmount: bool
             return result
 
     if register:
-        _register_desktop(bundle, app_id)
+        _register_desktop(bundle, app_id, box)
 
     termination_unmount(str(mount_path))
     return 0
@@ -485,26 +590,22 @@ def _confirm_install_gui(missing: list[str]) -> bool:
 # 실행 핸들러
 # ==============================================================================
 
-def _get_mountpath(apprunx: str) -> tuple[str, Path]:
-    app_id     = libapprun.get_bundle_id(apprunx)
-    mount_path = libapprun.get_mount_path(app_id)
-    return app_id, mount_path
-
-
 # 심볼릭 링크 임시 디렉토리 추적
 _tmp_symlink_dir: str | None = None
 
 
-def handle_run(apprunx: str, extra_args: list[str]) -> int:
+def handle_run(apprunx: str, extra_args: list[str], flags: dict) -> int:
     global _tmp_symlink_dir
     _tmp_symlink_dir = None
 
-    app_id, mount_path = _get_mountpath(apprunx)
+    app_id, mount_path, box, _portable_targets, inherit_targets = _resolve_runtime_paths(apprunx, flags)
+    libapprun.ensure_box_path(box)
+    _inherit_box(app_id, box, inherit_targets)
 
     if not ensure_base_packages(apprunx):
         return 1
 
-    if libapprun.is_locked(app_id):
+    if libapprun.is_locked_path(box):
         libapprun.show_gui_alert("AppRun", f"{app_id} 준비 중입니다. 잠시 후 다시 시도해주세요.", "warning")
         return 1
 
@@ -522,12 +623,12 @@ def handle_run(apprunx: str, extra_args: list[str]) -> int:
         return 1
 
     bundle      = str(mount_path)
-    prepare_code = handle_prepare(apprunx, mount_path, register=False, unmount=False)
+    prepare_code = handle_prepare(apprunx, mount_path, box, register=False, unmount=False)
     if prepare_code != 0:
         return prepare_code
 
     meta = libapprun.get_bundle_meta(bundle)
-    cmd  = _build_cmd(bundle, app_id, meta)
+    cmd  = _build_cmd(bundle, app_id, meta, box)
     if cmd is None:
         print(f"Error: entry point 없음: {bundle}", file=sys.stderr)
         return 10
@@ -537,7 +638,7 @@ def handle_run(apprunx: str, extra_args: list[str]) -> int:
     cmd = _wrap_screen(cmd, meta, app_id)
 
     # box 에 마운트 포인트 다이제스트 파일로 apprunx 위치 저장
-    rundir             = libapprun.get_box_path(app_id) / ".run"
+    rundir             = box / ".run"
     mountpoint_digest  = hashlib.sha256(str(mount_path).encode()).hexdigest()
     try:
         rundir.mkdir(parents=True, exist_ok=True)
@@ -587,7 +688,7 @@ def _get_proc_title(app_id: str, meta: dict) -> str:
     return app_id.split(".")[-1].replace(" ", "-")
 
 
-def _build_cmd(bundle: str, app_id: str, meta: dict) -> list[str] | None:
+def _build_cmd(bundle: str, app_id: str, meta: dict, box: Path) -> list[str] | None:
     global _tmp_symlink_dir
 
     b          = Path(bundle)
@@ -608,7 +709,7 @@ def _build_cmd(bundle: str, app_id: str, meta: dict) -> list[str] | None:
 
     if (b / "main.py").exists():
         _setup_pythonpath(bundle)
-        venv_py = str(libapprun.get_box_path(app_id) / "pyvenv" / "bin" / "python3")
+        venv_py = str(box / "pyvenv" / "bin" / "python3")
         return [make_symlink(venv_py), str(b / "main.py")]
 
     if (b / "main.jar").exists():
@@ -718,7 +819,7 @@ def _detect_crash(meta: dict, exit_code: int, duration: float) -> None:
         )
 
 
-def _register_desktop(bundle: str, app_id: str) -> None:
+def _register_desktop(bundle: str, app_id: str, box: Path) -> None:
     """
     ~/.local/share/applications/<app_id>.desktop 생성
     ~/.local/share/icons/<app_id>.png 아이콘 복사
@@ -734,7 +835,7 @@ def _register_desktop(bundle: str, app_id: str) -> None:
     if icon_src.exists():
         shutil.copy2(str(icon_src), str(icon_dest))
 
-    apprunx_ref  = libapprun.get_box_path(app_id) / "source.path"
+    apprunx_ref  = box / "source.path"
     apprunx_path = apprunx_ref.read_text().strip() if apprunx_ref.exists() else ""
 
     desktop_content = (
@@ -1812,6 +1913,12 @@ flags 가 있으면 해당 작업을 수행하고 종료합니다.
 준비 및 등록:
     --prepare                   실행 환경 준비 (마운트, venv, 의존성 설치)
     --register                  --prepare 수행 후 .desktop 파일 등록
+    --portable[=mount,box]      Box 와/또는 마운트 포인트를 .apprunx 옆
+                                <id>.apprunx.data.d 아래에 생성
+                                값 생략 시 mount,box 모두 portable 적용
+    --inherit[=venv,data,full]  기존 ~/.local/apprun/boxes/<id> 내용을
+                                portable Box 로 복사
+                                값 생략 시 full 적용
 
 파일 추출:
     --extract-file-from=<내부경로> --extract-file-to=<대상경로>
@@ -1873,6 +1980,8 @@ flags 가 있으면 해당 작업을 수행하고 종료합니다.
     apprun3 --id my-app.apprunx                     번들 ID 확인
     apprun3 --info=name,version my-app.apprunx      이름과 버전 확인
     apprun3 --prepare my-app.apprunx                실행 환경만 준비
+    apprun3 --portable my-app.apprunx               Box 와 마운트를 번들 옆에 생성
+    apprun3 --portable=box --inherit=venv my-app.apprunx
     apprun3 --register my-app.apprunx               데스크톱 등록
     apprun3 --install-as-service=oneshot,plymouth-quit-wait.service+systemd-user-sessions.service,network.target my-app.apprunx
     apprun3 --install-as-global-user-service=simple --enable my-app.apprunx
@@ -1915,6 +2024,14 @@ def parse_args(argv: list[str]):
             flags["info"] = arg[len("--info="):].split(",")
         elif arg == "--box-path":
             flags["box_path"] = True
+        elif arg == "--portable":
+            flags["portable"] = ["mount", "box"]
+        elif arg.startswith("--portable="):
+            flags["portable"] = _parse_option_list(arg[len("--portable="):], PORTABLE_TARGETS, "--portable")
+        elif arg == "--inherit":
+            flags["inherit"] = ["full"]
+        elif arg.startswith("--inherit="):
+            flags["inherit"] = _parse_option_list(arg[len("--inherit="):], INHERIT_TARGETS, "--inherit")
         elif arg == "--prepare":
             flags["prepare"] = True
         elif arg.startswith("--extract-file-from="):
@@ -2016,9 +2133,19 @@ def main():
     if flags:
         if "id"          in flags: sys.exit(handle_id(apprunx))
         if "info"        in flags: sys.exit(handle_info(apprunx, flags["info"] or None))
-        if "box_path"    in flags: sys.exit(handle_box_path(apprunx))
-        if "prepare"     in flags: sys.exit(handle_prepare(apprunx, _get_mountpath(apprunx)[1], register=False))
-        if "register"    in flags: sys.exit(handle_prepare(apprunx, _get_mountpath(apprunx)[1], register=True))
+        if "box_path"    in flags:
+            _app_id, _mount_path, box, _portable_targets, _inherit_targets = _resolve_runtime_paths(apprunx, flags)
+            sys.exit(handle_box_path(box))
+        if "prepare"     in flags:
+            app_id, mount_path, box, _portable_targets, inherit_targets = _resolve_runtime_paths(apprunx, flags)
+            libapprun.ensure_box_path(box)
+            _inherit_box(app_id, box, inherit_targets)
+            sys.exit(handle_prepare(apprunx, mount_path, box, register=False))
+        if "register"    in flags:
+            app_id, mount_path, box, _portable_targets, inherit_targets = _resolve_runtime_paths(apprunx, flags)
+            libapprun.ensure_box_path(box)
+            _inherit_box(app_id, box, inherit_targets)
+            sys.exit(handle_prepare(apprunx, mount_path, box, register=True))
         if "extract_file_from" in flags:
             sys.exit(handle_extract_file(apprunx, flags["extract_file_from"], flags["extract_file_to"]))
         if "install_services"   in flags:
@@ -2043,7 +2170,7 @@ def main():
         if "uninstall_services"   in flags: sys.exit(handle_uninstall_services(apprunx))
         if "uninstall_as_service" in flags: sys.exit(handle_uninstall_as_service(apprunx, flags.get("service_install_user")))
 
-    sys.exit(handle_run(apprunx, extra_args))
+    sys.exit(handle_run(apprunx, extra_args, flags))
 
 
 if __name__ == "__main__":

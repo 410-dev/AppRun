@@ -69,6 +69,8 @@ AppRun 이 systemd 서비스 등록을 위해 번들과 service 파일을 보관
 
 번들 ID 별 독립 공간입니다. Python 가상 환경, 원본 번들 경로, 실행 보조 파일을 저장합니다.
 
+`--portable=box` 또는 `meta.json` 의 `EnforcePortable: ["box"]` 를 사용하면 같은 역할의 Box 가 `.apprunx` 파일 옆의 `<id>.apprunx.data.d/box` 에 생성됩니다.
+
 ## ~/.local/apprun/boxes/\<id>/requirements.txt.sha256
 
 Python 번들 실행 시 `requirements.txt` 변경 여부를 확인하는 sha256 체크섬 파일입니다. 이 파일이 없거나 번들 내부 `requirements.txt` 의 체크섬과 다르면 Python 가상 환경을 다시 준비합니다.
@@ -92,6 +94,20 @@ Python 번들을 최초 준비할 때 생성하는 가상 환경입니다.
 ## ~/.local/apprun/mounts/\<id>.\<random>
 
 Format 3 번들을 실행할 때 squashfs 이미지를 읽기 전용으로 마운트하는 공간입니다. 실행이 끝나면 자동으로 언마운트됩니다.
+
+`--portable=mount` 또는 `meta.json` 의 `EnforcePortable: ["mount"]` 를 사용하면 마운트 포인트가 `.apprunx` 파일 옆의 `<id>.apprunx.data.d/mounts/<id>.<random>` 에 생성됩니다.
+
+## \<apprunx 위치>/\<id>.apprunx.data.d
+
+portable 실행 시 사용하는 번들 옆 데이터 디렉터리입니다. `--portable` 을 값 없이 사용하면 Box 와 마운트 포인트가 모두 이 디렉터리 아래에 생성됩니다.
+
+## \<apprunx 위치>/\<id>.apprunx.data.d/box
+
+portable Box 입니다. `--inherit` 또는 `meta.json` 의 `EnforceInherit` 를 사용하면 기존 `~/.local/apprun/boxes/<id>` 에서 선택한 내용을 이 위치로 복사합니다.
+
+## \<apprunx 위치>/\<id>.apprunx.data.d/mounts/\<id>.\<random>
+
+portable 마운트 포인트입니다. 실행이 끝나면 기본 마운트 포인트와 동일하게 자동으로 언마운트됩니다.
 
 ## ~/.local/share/services.apprd
 

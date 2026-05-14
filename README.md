@@ -13,6 +13,12 @@ Format 3 번들은 다음 명령어로 실행합니다:
 apprun3 <.apprunx 번들 위치> [앱 인자...]
 ```
 
+번들 옆에 실행 데이터를 보관하려면 portable 실행을 사용할 수 있습니다:
+```bash
+apprun3 --portable MyApp.apprunx
+apprun3 --portable=box --inherit=venv MyApp.apprunx
+```
+
 `apprun` 명령은 3.x 계열 설치 호환성을 위해 남아 있지만, 문서와 신규 사용법은 `apprun3` 를 기준으로 합니다.
 
 번들 디렉터리는 `apprun3-package` 로 `.apprunx` 파일로 패키징합니다:
