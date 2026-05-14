@@ -253,32 +253,77 @@ def _run_cmd_gui_term_prefer(gui_cmds: list[str]) -> bool:
         return proc.returncode == 0
 
 
-def _prepare_python(bundle: str, app_id: str, box: Path) -> int:
-    venv_py       = box / "pyvenv" / "bin" / "python3"
-    checksum_file = box / "requirements.txt.sha256"
-    req_file      = Path(bundle) / "requirements.txt"
+def _uv_venv_cmd(venv_dir: Path, python_version: str) -> list[str]:
+    cmd = [UV_BIN, "venv"]
+    if python_version:
+        cmd += ["--python", python_version]
+    cmd.append(str(venv_dir))
+    return cmd
 
+
+def _create_python_venv(venv_dir: Path, python_version: str) -> bool:
+    result = subprocess.run(_uv_venv_cmd(venv_dir, python_version))
+    if result.returncode != 0:
+        version_desc = f" (Python {python_version})" if python_version else ""
+        print(f"Error: venv 생성 실패{version_desc}", file=sys.stderr)
+        return False
+    return True
+
+
+def _prepare_python(bundle: str, app_id: str, box: Path) -> int:
+    venv_dir            = box / "pyvenv"
+    venv_py             = venv_dir / "bin" / "python3"
+    checksum_file       = box / "requirements.txt.sha256"
+    python_version_file = box / "python_version"
+    req_file            = Path(bundle) / "requirements.txt"
+    meta                = libapprun.get_bundle_meta(bundle)
+    python_version      = meta.get("python_version", "")
+
+    if python_version is None:
+        python_version = ""
+    elif not isinstance(python_version, str):
+        print("Error: meta.json 의 python_version 은 문자열이어야 합니다.", file=sys.stderr)
+        return 1
+    python_version = python_version.strip()
+
+    stored_python_version = (
+        python_version_file.read_text().strip()
+        if python_version_file.exists()
+        else ""
+    )
+    python_version_changed = venv_py.exists() and python_version != stored_python_version
+
+    if python_version_changed:
+        shutil.rmtree(venv_dir, ignore_errors=True)
+        checksum_file.unlink(missing_ok=True)
+
+    venv_created = False
     if not venv_py.exists():
-        result = subprocess.run([UV_BIN, "venv", str(box / "pyvenv")])
-        if result.returncode != 0:
-            print("Error: venv 생성 실패", file=sys.stderr)
+        if not _create_python_venv(venv_dir, python_version):
             return 1
+        venv_created = True
+
+    python_version_file.write_text(python_version)
 
     if not req_file.exists():
         return 0
 
     new_checksum = libapprun.get_checksum(str(req_file))
     old_checksum = checksum_file.read_text().strip() if checksum_file.exists() else ""
+    if venv_created:
+        old_checksum = ""
 
-    if old_checksum == new_checksum:
+    if old_checksum == new_checksum and not venv_created:
         return 0
 
     if old_checksum == "":
         libapprun.notify("[AppRun] 의존성 설치 중", f"{app_id} 패키지를 설치합니다.")
     else:
         libapprun.notify("[AppRun] 의존성 업데이트 중", f"{app_id} 패키지가 변경되었습니다.")
-        shutil.rmtree(box / "pyvenv", ignore_errors=True)
-        subprocess.run([UV_BIN, "venv", str(box / "pyvenv")], check=True)
+        shutil.rmtree(venv_dir, ignore_errors=True)
+        if not _create_python_venv(venv_dir, python_version):
+            return 1
+        python_version_file.write_text(python_version)
 
     success = _run_cmd_gui_term_prefer([
         UV_BIN, "pip", "install",

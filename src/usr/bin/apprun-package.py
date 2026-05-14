@@ -78,6 +78,9 @@ def validate_bundle(bundle: str) -> list[str]:
         if not meta.get(key):
             print(f"  경고: meta.json 에 '{key}' 가 없습니다. (권장)")
 
+    if "python_version" in meta and not isinstance(meta["python_version"], str):
+        errors.append("meta.json 의 python_version 은 문자열이어야 합니다.")
+
     # 권장: 아이콘
     if not (b / "AppRunMeta" / "DesktopLinks" / "Icon.png").exists():
         print("  경고: AppRunMeta/DesktopLinks/Icon.png 가 없습니다. (권장)")

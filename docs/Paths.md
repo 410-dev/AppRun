@@ -73,6 +73,10 @@ AppRun 이 systemd 서비스 등록을 위해 번들과 service 파일을 보관
 
 Python 번들 실행 시 `requirements.txt` 변경 여부를 확인하는 sha256 체크섬 파일입니다. 이 파일이 없거나 번들 내부 `requirements.txt` 의 체크섬과 다르면 Python 가상 환경을 다시 준비합니다.
 
+## ~/.local/apprun/boxes/\<id>/python_version
+
+Python 번들의 venv 생성에 사용한 `meta.json` 의 `python_version` 값을 저장합니다. 값이 달라지면 다음 준비 과정에서 `pyvenv` 를 다시 생성하고 의존성을 재설치합니다.
+
 ## ~/.local/apprun/boxes/\<id>/pyvenv
 
 Python 번들을 최초 준비할 때 생성하는 가상 환경입니다.
