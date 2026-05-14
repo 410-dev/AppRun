@@ -18,6 +18,7 @@ AppRun 실행 파일과 호환성 링크가 위치합니다.
 공용 Python 모듈이 위치합니다.
 
 - `libapprun.py`
+- `apprun_i18n.py`
 - `AppContext.py` 링크
 
 ## /usr/lib/AppRun
@@ -30,6 +31,10 @@ AppRun 런타임 보조 파일과 내장 서비스 번들이 위치합니다.
 ## /usr/share/dictionaries/apprun-python
 
 `dictionary.py` 가 AppRun Python Collection ID 를 실제 경로로 치환할 때 읽는 JSON 사전 디렉터리입니다.
+
+## /usr/share/apprun/lang
+
+AppRun CLI, 알림, GUI 다이얼로그 다국어 출력용 JSON 언어 파일이 위치합니다. 기본 제공 파일은 `en.json`, `ko.json` 이며, 같은 키 구조의 `<언어코드>.json` 파일을 추가하면 다른 언어를 확장할 수 있습니다.
 
 ## /usr/share/applications
 

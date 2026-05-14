@@ -20,8 +20,12 @@ import subprocess
 import shutil
 from pathlib import Path
 
+LOCAL_DIST_PACKAGES = Path(__file__).resolve().parents[1] / "lib/python3/dist-packages"
 sys.path.insert(0, "/usr/lib/python3/dist-packages")
+if LOCAL_DIST_PACKAGES.exists():
+    sys.path.insert(0, str(LOCAL_DIST_PACKAGES))
 import libapprun
+from apprun_i18n import tr
 
 
 # ==============================================================================
@@ -58,7 +62,7 @@ def validate_bundle(bundle: str) -> list[str]:
 
     # 필수: AppRunMeta/id
     if not (b / "AppRunMeta" / "id").exists():
-        errors.append("AppRunMeta/id 파일이 없습니다.")
+        errors.append(tr("package.error.id_missing"))
 
     # 필수: entry point
     meta = libapprun.get_bundle_meta(bundle)
@@ -70,20 +74,20 @@ def validate_bundle(bundle: str) -> list[str]:
         (b / "main").exists() and os.access(b / "main", os.X_OK),
     ])
     if not has_entry:
-        errors.append("entry point 없음 (meta.json entry_point, main.py/jar/sh/main 중 하나 필요)")
+        errors.append(tr("package.error.entry_missing"))
 
     # meta.json 권장 키 검사
     recommended_keys = ["name", "version", "type"]
     for key in recommended_keys:
         if not meta.get(key):
-            print(f"  경고: meta.json 에 '{key}' 가 없습니다. (권장)")
+            print(tr("package.warning.meta_missing", key=key))
 
     if "python_version" in meta and not isinstance(meta["python_version"], str):
-        errors.append("meta.json 의 python_version 은 문자열이어야 합니다.")
+        errors.append(tr("package.error.python_version_type"))
 
     # 권장: 아이콘
     if not (b / "AppRunMeta" / "DesktopLinks" / "Icon.png").exists():
-        print("  경고: AppRunMeta/DesktopLinks/Icon.png 가 없습니다. (권장)")
+        print(tr("package.warning.icon_missing"))
 
     return errors
 
@@ -94,28 +98,28 @@ def validate_bundle(bundle: str) -> list[str]:
 def package(bundle: str, output: str, prefer: str) -> int:
     b = Path(bundle)
 
-    print(f"AppRun Format 3 패키징")
-    print(f"  번들:  {b}")
-    print(f"  출력:  {output}")
-    print(f"  압축:  {prefer} ({PREFER_MAP[prefer][0]})")
+    print(tr("package.title"))
+    print(tr("package.bundle", value=b))
+    print(tr("package.output", value=output))
+    print(tr("package.compression", prefer=prefer, algorithm=PREFER_MAP[prefer][0]))
     print()
 
     # --- 유효성 검사 ---
-    print("번들 구조 검사 중...")
+    print(tr("package.checking"))
     errors = validate_bundle(bundle)
     if errors:
         print()
-        print("오류가 발견되었습니다. 패키징을 중단합니다:")
+        print(tr("package.errors_found"))
         for e in errors:
-            print(f"  오류: {e}")
+            print(tr("package.error_item", error=e))
         return 1
-    print("  구조 검사 통과")
+    print(tr("package.check_passed"))
     print()
 
     # --- 기존 출력 파일 처리 ---
     out = Path(output)
     if out.exists():
-        print(f"기존 파일 제거: {out}")
+        print(tr("package.removing_existing", path=out))
         out.unlink()
 
     # --- mksquashfs 호출 ---
@@ -136,11 +140,11 @@ def package(bundle: str, output: str, prefer: str) -> int:
         *exclude_args,
     ]
 
-    print("패키징 중...")
+    print(tr("package.packaging"))
     result = subprocess.run(cmd)
 
     if result.returncode != 0:
-        print("오류: mksquashfs 실패", file=sys.stderr)
+        print(tr("package.error_mksquashfs"), file=sys.stderr)
         out.unlink(missing_ok=True)
         return 1
 
@@ -159,16 +163,16 @@ def _print_result(bundle: str, output: str) -> None:
     packed_size   = out.stat().st_size
     ratio         = (1 - packed_size / original_size) * 100 if original_size > 0 else 0
 
-    print("패키징 완료!")
-    print(f"  ID:      {app_id}")
+    print(tr("package.complete"))
+    print(tr("package.id", value=app_id))
     if meta.get("name"):
-        print(f"  이름:    {meta['name']}")
+        print(tr("package.name", value=meta["name"]))
     if meta.get("version"):
-        print(f"  버전:    {meta['version']}")
-    print(f"  원본:    {_human_size(original_size)}")
-    print(f"  패키지:  {_human_size(packed_size)}")
-    print(f"  압축률:  {ratio:.1f}%")
-    print(f"  출력:    {output}")
+        print(tr("package.version", value=meta["version"]))
+    print(tr("package.source_size", value=_human_size(original_size)))
+    print(tr("package.package_size", value=_human_size(packed_size)))
+    print(tr("package.ratio", value=ratio))
+    print(tr("package.output", value=output))
 
 
 def _dir_size(path: str) -> int:
@@ -187,35 +191,44 @@ def _human_size(size: int) -> str:
     return f"{size:.1f} TB"
 
 
+def _configure_argparse_i18n() -> None:
+    def translate(text: str) -> str:
+        mapping = {
+            "usage: ": tr("argparse.usage_prefix"),
+            "positional arguments": tr("argparse.positional_arguments"),
+            "options": tr("argparse.options"),
+            "show this help message and exit": tr("argparse.help"),
+        }
+        return mapping.get(text, text)
+
+    argparse._ = translate
+
+
 # ==============================================================================
 # 인자 파싱
 # ==============================================================================
 
 def parse_args(argv: list[str]):
+    _configure_argparse_i18n()
     parser = argparse.ArgumentParser(
         prog="apprun3-package",
-        description="AppRun Format 3 패키징 도구",
+        description=tr("package.description"),
         formatter_class=argparse.RawTextHelpFormatter,
     )
     parser.add_argument(
         "bundle",
-        help="패키징할 번들 디렉터리 경로"
+        help=tr("package.arg.bundle")
     )
     parser.add_argument(
         "-o", "--output",
         default=None,
-        help="출력 .apprunx 경로 (기본값: <bundle name>.apprunx)"
+        help=tr("package.arg.output")
     )
     parser.add_argument(
         "--prefer",
         choices=["speed", "size", "balanced"],
         default=DEFAULT_PREFER,
-        help=(
-            "압축 방식 선택\n"
-            "  speed    — lz4,  빠른 속도, 큰 파일 (개발/테스트용)\n"
-            "  balanced — zstd, 속도/크기 균형 (기본값)\n"
-            "  size     — xz,   최고 압축률, 느린 속도 (배포용)"
-        )
+        help=tr("package.arg.prefer")
     )
     return parser.parse_args(argv)
 
@@ -231,7 +244,7 @@ def main():
 
     # 번들 경로 확인
     if not Path(bundle).is_dir():
-        print(f"오류: 디렉터리를 찾을 수 없습니다: {bundle}", file=sys.stderr)
+        print(tr("package.error_directory_missing", path=bundle), file=sys.stderr)
         sys.exit(1)
 
     # 출력 경로 결정
@@ -248,7 +261,7 @@ def main():
 
     # 출력 경로가 .apprunx 로 끝나지 않으면 경고
     if not output.endswith(".apprunx"):
-        print(f"경고: 출력 파일명이 .apprunx 로 끝나지 않습니다: {output}")
+        print(tr("package.warning_extension", path=output))
 
     sys.exit(package(bundle, output, args.prefer))
 

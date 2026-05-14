@@ -13,6 +13,7 @@ import re
 from packaging.version import Version, InvalidVersion
 from pathlib import Path
 from enum import IntEnum
+from apprun_i18n import tr
 
 
 # ==============================================================================
@@ -77,7 +78,7 @@ def get_bundle_meta(path: str) -> dict:
         else:
             raise FileNotFoundError(f"{path} not found in {path}")
     except Exception as exc:
-        print(f"[-] Failed to read meta.json from {path}. Is it a valid bundle? ({exc})")
+        print(tr("error.meta_read_failed", path=path, error=exc))
         return {}
     try:
         return json.loads(raw)

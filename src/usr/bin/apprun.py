@@ -15,8 +15,12 @@ import shutil
 import tempfile
 from pathlib import Path
 
+LOCAL_DIST_PACKAGES = Path(__file__).resolve().parents[1] / "lib/python3/dist-packages"
 sys.path.insert(0, "/usr/lib/python3/dist-packages")
+if LOCAL_DIST_PACKAGES.exists():
+    sys.path.insert(0, str(LOCAL_DIST_PACKAGES))
 import libapprun
+from apprun_i18n import tr
 
 
 # ==============================================================================
@@ -107,7 +111,7 @@ def _argv_with_absolute_bundle(apprunx: str) -> list[str]:
 def _reexec_privileged(apprunx: str) -> int:
     """현재 CLI 호출을 root 권한으로 한 번 다시 실행."""
     if not _can_escalate():
-        print("Error: 서비스 설치에는 root 권한이 필요합니다.", file=sys.stderr)
+        print(tr("error.root_required_service_install"), file=sys.stderr)
         return 1
 
     cmd = _sudo_cmd() + [_current_cli_command(), *_argv_with_absolute_bundle(apprunx)]
@@ -120,7 +124,7 @@ def _parse_option_list(value: str, valid: set[str], option_name: str) -> list[st
     invalid = [item for item in items if item not in valid]
     if invalid:
         print(
-            f"Error: {option_name} 값이 올바르지 않습니다: {', '.join(invalid)}",
+            tr("error.invalid_option_value", option=option_name, values=", ".join(invalid)),
             file=sys.stderr,
         )
         sys.exit(2)
@@ -134,17 +138,17 @@ def _meta_option_list(meta: dict, key: str, valid: set[str]) -> list[str]:
     if isinstance(raw, str):
         raw = [raw]
     if not isinstance(raw, list):
-        print(f"Warning: meta.json 의 {key} 는 배열이어야 합니다.", file=sys.stderr)
+        print(tr("warning.meta_array_required", key=key), file=sys.stderr)
         return []
 
     values: list[str] = []
     for item in raw:
         if not isinstance(item, str):
-            print(f"Warning: meta.json 의 {key} 항목은 문자열이어야 합니다: {item}", file=sys.stderr)
+            print(tr("warning.meta_item_string_required", key=key, item=item), file=sys.stderr)
             continue
         normalized = item.strip().lower()
         if normalized not in valid:
-            print(f"Warning: meta.json 의 {key} 값을 무시합니다: {item}", file=sys.stderr)
+            print(tr("warning.meta_value_ignored", key=key, item=item), file=sys.stderr)
             continue
         values.append(normalized)
     return values
@@ -250,7 +254,7 @@ def handle_extract_file(apprunx: str, inner_path: str, dest: str) -> int:
     try:
         data = libapprun.peek_file_bytes(apprunx, inner_path)
     except FileNotFoundError:
-        print(f"Error: '{inner_path}' 를 찾을 수 없습니다.", file=sys.stderr)
+        print(tr("error.inner_file_not_found", path=inner_path), file=sys.stderr)
         return 1
     dest_path.write_bytes(data)
     return 0
@@ -267,7 +271,7 @@ def handle_prepare(apprunx: str, mount_path: Path, box: Path, register: bool, un
     try:
         (box / "source.path").write_text(str(Path(apprunx).resolve()))
     except Exception as e:
-        print(f"Warning: 원본 번들 경로 저장 실패: {e}", file=sys.stderr)
+        print(tr("warning.source_path_write_failed", error=e), file=sys.stderr)
 
     mount_path.mkdir(parents=True, exist_ok=True)
 
@@ -276,21 +280,24 @@ def handle_prepare(apprunx: str, mount_path: Path, box: Path, register: bool, un
             try:
                 libapprun.unmount(mnt)
             except Exception as ex:
-                print(f"Warning: 마운트 해제 실패: {ex}", file=sys.stderr)
+                print(tr("warning.unmount_failed", error=ex), file=sys.stderr)
 
     if not libapprun.is_mounted(str(mount_path)):
         try:
             libapprun.mount(apprunx, str(mount_path))
         except RuntimeError as e:
-            print(f"Error: 마운트 실패: {e}", file=sys.stderr)
+            print(tr("error.mount_failed", error=e), file=sys.stderr)
             termination_unmount(str(mount_path))
             return 1
 
     bundle = str(mount_path)
 
     if not _validate_entry(bundle):
-        libapprun.notify("[AppRun] 준비 실패", f"entry point 없음: {app_id}")
-        print("Error: 실행 가능한 entry point 없음", file=sys.stderr)
+        libapprun.notify(
+            tr("notify.prepare_failed_title"),
+            tr("notify.prepare_failed_entry_missing", app_id=app_id),
+        )
+        print(tr("error.entry_missing"), file=sys.stderr)
         termination_unmount(str(mount_path))
         return 9
 
@@ -333,9 +340,9 @@ def _run_cmd_gui_term_prefer(gui_cmds: list[str]) -> bool:
                 "success=$?; "
                 f"echo $success > {exitcode_file}; "
                 "if [ $success -eq 0 ]; then "
-                "  echo ''; echo '✅ 설치 완료. 3초 후 창이 닫힙니다'; sleep 3; "
+                f"  echo ''; echo {shlex.quote(tr('terminal.install_success'))}; sleep 3; "
                 "else "
-                "  echo ''; echo '❌ 설치 실패. 창을 닫으려면 아무 키나 누르세요'; read -n 1; "
+                f"  echo ''; echo {shlex.quote(tr('terminal.install_failed'))}; read -n 1; "
                 "fi"
             )
             proc = subprocess.run(terminal + ["bash", "-c", shell_cmd])
@@ -350,9 +357,8 @@ def _run_cmd_gui_term_prefer(gui_cmds: list[str]) -> bool:
             Path(exitcode_file).unlink(missing_ok=True)
     else:
         libapprun.notify(
-            "[AppRun] 의존성 설치중",
-            f"[AppRun] 터미널 에뮬레이터를 찾을 수 없습니다. "
-            f"명령을 백그라운드에서 실행합니다: {' '.join(gui_cmds)}",
+            tr("notify.installing_deps_title"),
+            tr("notify.no_terminal_background", cmd=" ".join(gui_cmds)),
         )
         proc = subprocess.run(gui_cmds)
         return proc.returncode == 0
@@ -370,7 +376,7 @@ def _create_python_venv(venv_dir: Path, python_version: str) -> bool:
     result = subprocess.run(_uv_venv_cmd(venv_dir, python_version))
     if result.returncode != 0:
         version_desc = f" (Python {python_version})" if python_version else ""
-        print(f"Error: venv 생성 실패{version_desc}", file=sys.stderr)
+        print(tr("error.venv_create_failed", version_desc=version_desc), file=sys.stderr)
         return False
     return True
 
@@ -387,7 +393,7 @@ def _prepare_python(bundle: str, app_id: str, box: Path) -> int:
     if python_version is None:
         python_version = ""
     elif not isinstance(python_version, str):
-        print("Error: meta.json 의 python_version 은 문자열이어야 합니다.", file=sys.stderr)
+        print(tr("error.python_version_type"), file=sys.stderr)
         return 1
     python_version = python_version.strip()
 
@@ -422,9 +428,15 @@ def _prepare_python(bundle: str, app_id: str, box: Path) -> int:
         return 0
 
     if old_checksum == "":
-        libapprun.notify("[AppRun] 의존성 설치 중", f"{app_id} 패키지를 설치합니다.")
+        libapprun.notify(
+            tr("notify.installing_packages_title"),
+            tr("notify.installing_packages_body", app_id=app_id),
+        )
     else:
-        libapprun.notify("[AppRun] 의존성 업데이트 중", f"{app_id} 패키지가 변경되었습니다.")
+        libapprun.notify(
+            tr("notify.updating_packages_title"),
+            tr("notify.updating_packages_body", app_id=app_id),
+        )
         shutil.rmtree(venv_dir, ignore_errors=True)
         if not _create_python_venv(venv_dir, python_version):
             return 1
@@ -437,12 +449,12 @@ def _prepare_python(bundle: str, app_id: str, box: Path) -> int:
     ])
 
     if not success:
-        print("Error: 패키지 설치 실패", file=sys.stderr)
-        libapprun.notify("[AppRun] 설치 실패", f"{app_id} 패키지 설치 실패")
+        print(tr("error.package_install_failed"), file=sys.stderr)
+        libapprun.notify(tr("app.install_failed_title"), tr("notify.install_failed_body", app_id=app_id))
         return 1
 
     checksum_file.write_text(new_checksum)
-    libapprun.notify("[AppRun] 준비 완료", f"{app_id} 준비 완료")
+    libapprun.notify(tr("notify.prepare_complete_title"), tr("notify.prepare_complete_body", app_id=app_id))
     return 0
 
 
@@ -488,8 +500,8 @@ def _pkg_names_only(requirements: list[str]) -> list[str]:
 def _install_packages_gui(pkg_names: list[str]) -> bool:
     if not _pkexec_available():
         libapprun.show_gui_alert(
-            "AppRun — 패키지 설치 오류",
-            "pkexec 를 찾을 수 없습니다. polkit 이 설치되어 있는지 확인하세요.",
+            tr("app.install_packages_error_title"),
+            tr("error.pkexec_missing"),
             level="error",
         )
         return False
@@ -502,16 +514,16 @@ def _install_packages_cli(pkg_names: list[str], auto: bool = False) -> bool:
     auto=True 이면 묻지 않고 즉시 설치.
     """
     if not auto:
-        print(f"\n[AppRun] 다음 패키지가 필요합니다: {', '.join(pkg_names)}")
+        print(tr("cli.required_packages", packages=", ".join(pkg_names)))
         try:
-            answer = input("지금 설치하시겠습니까? [y/N] ").strip().lower()
+            answer = input(tr("cli.install_now_prompt")).strip().lower()
         except EOFError:
             answer = "n"
         if answer not in ("y", "yes"):
             return False
 
     apt_cmd = ["sudo", "apt-get", "install", "-y"] + pkg_names
-    print(f"[AppRun] 실행: {' '.join(apt_cmd)}")
+    print(tr("cli.running_command", cmd=" ".join(apt_cmd)))
     return subprocess.run(apt_cmd).returncode == 0
 
 
@@ -529,31 +541,31 @@ def ensure_base_packages(path: str) -> bool:
     if _has_gui():
         if not _confirm_install_gui(missing):
             libapprun.show_gui_alert(
-                "AppRun — 실행 취소",
-                "필수 패키지가 설치되지 않아 실행을 중단합니다.",
+                tr("app.launch_cancelled_title"),
+                tr("alert.required_packages_missing"),
                 level="warning",
             )
             return False
         try:
             success = _install_packages_gui(pkg_names)
         except Exception as e:
-            print(f"Error during package installation: {e}", file=sys.stderr)
+            print(tr("error.package_install_exception", error=e), file=sys.stderr)
             success = False
 
         if not success:
             libapprun.show_gui_alert(
-                "AppRun — 설치 실패",
-                "패키지 설치에 실패했습니다. 로그를 확인하세요.",
+                tr("app.install_failed_title"),
+                tr("alert.package_install_failed"),
                 level="error",
             )
         return success
     else:
         auto = os.environ.get("AUTO_INSTALL_BASEPKG", "0") == "1"
         if auto:
-            print(f"[AppRun] AUTO_INSTALL_BASEPKG=1 — 자동 설치: {', '.join(pkg_names)}")
+            print(tr("cli.auto_install_basepkg", packages=", ".join(pkg_names)))
         success = _install_packages_cli(pkg_names, auto=auto)
         if not success:
-            print("[AppRun] 패키지 설치가 취소되었거나 실패했습니다. 실행을 중단합니다.")
+            print(tr("cli.package_install_cancelled"))
         return success
 
 
@@ -563,23 +575,23 @@ def _confirm_install_gui(missing: list[str]) -> bool:
     둘 다 없으면 True (설치 진행) 로 fallback.
     """
     pkg_list = "\n".join(f"  • {p}" for p in missing)
-    message  = f"이 앱을 실행하려면 다음 패키지가 필요합니다:\n\n{pkg_list}\n\n지금 설치하시겠습니까?"
+    message  = tr("dialog.required_packages", packages=pkg_list)
 
     if shutil.which("zenity"):
         result = subprocess.run([
             "zenity", "--question",
             f"--text={message}",
-            "--title=AppRun — 필수 패키지 설치",
+            f"--title={tr('app.install_packages_title')}",
             "--width=420",
-            "--ok-label=설치",
-            "--cancel-label=취소",
+            f"--ok-label={tr('dialog.install')}",
+            f"--cancel-label={tr('dialog.cancel')}",
         ])
         return result.returncode == 0
 
     if shutil.which("kdialog"):
         result = subprocess.run([
             "kdialog", "--yesno", message,
-            "--title", "AppRun — 필수 패키지 설치",
+            "--title", tr("app.install_packages_title"),
         ])
         return result.returncode == 0
 
@@ -606,20 +618,20 @@ def handle_run(apprunx: str, extra_args: list[str], flags: dict) -> int:
         return 1
 
     if libapprun.is_locked_path(box):
-        libapprun.show_gui_alert("AppRun", f"{app_id} 준비 중입니다. 잠시 후 다시 시도해주세요.", "warning")
+        libapprun.show_gui_alert(tr("app.title"), tr("alert.app_preparing", app_id=app_id), "warning")
         return 1
 
     if libapprun.is_mounted(str(mount_path)):
         try:
             libapprun.unmount(str(mount_path))
         except Exception as e:
-            libapprun.show_gui_alert("AppRun 오류", f"기존 이미지 언마운트 실패: {e}", "error")
+            libapprun.show_gui_alert(tr("app.error_title"), tr("alert.old_unmount_failed", error=e), "error")
             return 1
 
     try:
         libapprun.mount(apprunx, str(mount_path))
     except RuntimeError as e:
-        libapprun.show_gui_alert("AppRun 오류", f"마운트 실패: {e}", "error")
+        libapprun.show_gui_alert(tr("app.error_title"), tr("error.mount_failed", error=e), "error")
         return 1
 
     bundle      = str(mount_path)
@@ -630,7 +642,7 @@ def handle_run(apprunx: str, extra_args: list[str], flags: dict) -> int:
     meta = libapprun.get_bundle_meta(bundle)
     cmd  = _build_cmd(bundle, app_id, meta, box)
     if cmd is None:
-        print(f"Error: entry point 없음: {bundle}", file=sys.stderr)
+        print(tr("error.entry_missing_path", path=bundle), file=sys.stderr)
         return 10
 
     cmd = _wrap_root(cmd, meta)
@@ -644,28 +656,28 @@ def handle_run(apprunx: str, extra_args: list[str], flags: dict) -> int:
         rundir.mkdir(parents=True, exist_ok=True)
         rundir.joinpath(mountpoint_digest).write_text(os.path.abspath(apprunx))
     except Exception as e:
-        print(f"Warning: 런디렉토리에 마운트 정보 저장 실패: {e}", file=sys.stderr)
+        print(tr("warning.run_dir_write_failed", error=e), file=sys.stderr)
 
     start  = time.time()
     result = None
     try:
         result = subprocess.run(cmd + extra_args)
     except KeyboardInterrupt:
-        print("실행이 취소되었습니다.", file=sys.stderr)
+        print(tr("error.run_cancelled"), file=sys.stderr)
     finally:
         try:
             libapprun.unmount(str(mount_path))
         except Exception as e:
-            print(f"마운트 해제 실패: {e}", file=sys.stderr)
+            print(tr("error.run_unmount_failed", error=e), file=sys.stderr)
 
         digest_file = rundir.joinpath(mountpoint_digest)
         if digest_file.exists():
             try:
                 digest_file.unlink()
             except Exception as e:
-                print(f"Warning: 런디렉토리 파일 삭제 실패: {e}", file=sys.stderr)
+                print(tr("warning.run_dir_delete_failed", error=e), file=sys.stderr)
         else:
-            print(f"Warning: 런디렉토리 파일이 존재하지 않습니다: {digest_file}", file=sys.stderr)
+            print(tr("warning.run_dir_missing", path=digest_file), file=sys.stderr)
 
         if _tmp_symlink_dir and os.path.isdir(_tmp_symlink_dir):
             try:
@@ -757,7 +769,7 @@ def _wrap_terminal(cmd: list[str], meta: dict) -> list[str]:
         return cmd
 
     if not libapprun.can_use_dbus_and_gui():
-        print(f"CRITICAL ERROR: Unable to launch application within wrapped terminal emulator. DBUS or GUI environment not detected.", file=sys.stderr)
+        print(tr("error.terminal_gui_missing"), file=sys.stderr)
         return cmd
 
     terminals = [
@@ -773,9 +785,8 @@ def _wrap_terminal(cmd: list[str], meta: dict) -> list[str]:
             return [term] + separator + ([shlex.join(cmd)] if join_cmd else cmd)
 
     libapprun.show_gui_alert(
-        "AppRun 오류",
-        "터미널 에뮬레이터를 찾을 수 없습니다.\n"
-        "ptyxis, alacritty, gnome-terminal, konsole, xfce4-terminal, xterm 중 하나를 설치해주세요.",
+        tr("app.error_title"),
+        tr("alert.terminal_missing"),
         "error",
     )
     sys.exit(1)
@@ -791,12 +802,12 @@ def _wrap_screen(cmd: list[str], meta: dict, app_id: str) -> list[str]:
         return ["screen", "-D", "-m", "-S", session] + cmd
 
     if mode == "enforced":
-        libapprun.show_gui_alert("AppRun 오류", "'screen' 이 필요하지만 설치되지 않았습니다.", "error")
+        libapprun.show_gui_alert(tr("app.error_title"), tr("alert.screen_required"), "error")
         sys.exit(127)
 
     libapprun.show_gui_alert(
-        "AppRun 안내",
-        "'screen' 을 권장하지만 설치되지 않아 일반 모드로 실행합니다.",
+        tr("app.info_title"),
+        tr("alert.screen_recommended"),
         "warning",
     )
     return cmd
@@ -807,14 +818,14 @@ def _detect_crash(meta: dict, exit_code: int, duration: float) -> None:
         return
     if exit_code != 0:
         libapprun.show_gui_alert(
-            "AppRun — 앱 크래시",
-            f"앱이 비정상 종료되었습니다. (exit code {exit_code})",
+            tr("app.crash_title"),
+            tr("alert.app_crashed", exit_code=exit_code),
             "error",
         )
     elif duration < 1.0:
         libapprun.show_gui_alert(
-            "AppRun — 비정상 종료",
-            "앱이 너무 빨리 종료되었습니다. 크래시가 발생했을 수 있습니다.",
+            tr("app.abnormal_exit_title"),
+            tr("alert.app_exited_too_fast"),
             "warning",
         )
 
@@ -861,7 +872,7 @@ def handle_install_services(apprunx: str, enable: bool, start: bool) -> int:
     try:
         file_list = libapprun.list_files(apprunx)
     except Exception as e:
-        print(f"Error: 번들 파일 목록을 읽을 수 없습니다: {e}", file=sys.stderr)
+        print(tr("error.bundle_file_list_failed", error=e), file=sys.stderr)
         return 1
 
     service_files = [
@@ -869,7 +880,7 @@ def handle_install_services(apprunx: str, enable: bool, start: bool) -> int:
         if f.startswith("services/") and f.endswith(".service")
     ]
     if not service_files:
-        print("Error: 번들 내에 services/*.service 파일이 없습니다.", file=sys.stderr)
+        print(tr("error.no_service_files"), file=sys.stderr)
         return 1
 
     if os.geteuid() != 0:
@@ -886,7 +897,7 @@ def handle_install_services(apprunx: str, enable: bool, start: bool) -> int:
             try:
                 data = libapprun.peek_file_bytes(apprunx, svc_path)
             except FileNotFoundError:
-                print(f"Warning: '{svc_path}' 를 읽을 수 없습니다. 건너뜁니다.", file=sys.stderr)
+                print(tr("warning.service_read_failed", path=svc_path), file=sys.stderr)
                 continue
             stored_unit = SYSTEM_SERVICE_STORE_DIR / svc_name
             dest = SYSTEMD_UNIT_DIR / svc_name
@@ -894,10 +905,10 @@ def handle_install_services(apprunx: str, enable: bool, start: bool) -> int:
             stored_unit.chmod(0o644)
             _replace_symlink(dest, stored_unit)
             installed.append(svc_name)
-            print(f"  설치됨: {dest} -> {stored_unit}")
+            print(tr("service.installed_item", dest=dest, stored=stored_unit))
 
         if not installed:
-            print("Error: 설치할 서비스 파일이 없습니다.", file=sys.stderr)
+            print(tr("error.no_installable_services"), file=sys.stderr)
             return 1
 
         _systemctl_daemon_reload()
@@ -913,17 +924,17 @@ def handle_install_services(apprunx: str, enable: bool, start: bool) -> int:
                 try:
                     data = libapprun.peek_file_bytes(apprunx, svc_path)
                 except FileNotFoundError:
-                    print(f"Warning: '{svc_path}' 를 읽을 수 없습니다. 건너뜁니다.", file=sys.stderr)
+                    print(tr("warning.service_read_failed", path=svc_path), file=sys.stderr)
                     continue
                 tmp = _prepare_temp_file(data)
                 stored_unit = SYSTEM_SERVICE_STORE_DIR / svc_name
                 dest = SYSTEMD_UNIT_DIR / svc_name
                 tmp_map.append((tmp, stored_unit, dest))
                 installed.append(svc_name)
-                print(f"  설치됨: {dest} -> {stored_unit}")
+                print(tr("service.installed_item", dest=dest, stored=stored_unit))
 
             if not installed:
-                print("Error: 설치할 서비스 파일이 없습니다.", file=sys.stderr)
+                print(tr("error.no_installable_services"), file=sys.stderr)
                 return 1
 
             script_parts: list[str] = [
@@ -945,9 +956,9 @@ def handle_install_services(apprunx: str, enable: bool, start: bool) -> int:
             for tmp, _, _ in tmp_map:
                 Path(tmp).unlink(missing_ok=True)
 
-    print(f"\n{len(installed)}개 서비스 파일 설치 완료.")
+    print(tr("service.install_complete_count", count=len(installed)))
     if not actions:
-        print("서비스를 활성화하려면: sudo systemctl enable --now <서비스명>")
+        print(tr("service.enable_hint"))
     return 0
 
 # ==============================================================================
@@ -973,15 +984,15 @@ def _parse_generated_service_spec(
 
     parts = (spec or "").split(",")
     if not parts[0].strip():
-        print("Error: 서비스 타입이 지정되지 않았습니다.", file=sys.stderr)
-        print(f"사용법: {usage_flag}=<type>[,<after>][,<before>]", file=sys.stderr)
+        print(tr("error.service_type_missing"), file=sys.stderr)
+        print(tr("usage.generated_service", flag=usage_flag), file=sys.stderr)
         return None
 
     svc_type    = parts[0].strip()
     valid_types = ("simple", "oneshot", "forking", "notify", "idle")
     if svc_type not in valid_types:
-        print(f"Error: 알 수 없는 서비스 타입 '{svc_type}'.", file=sys.stderr)
-        print(f"지원 타입: {', '.join(valid_types)}", file=sys.stderr)
+        print(tr("error.unknown_service_type", type=svc_type), file=sys.stderr)
+        print(tr("service.supported_types", types=", ".join(valid_types)), file=sys.stderr)
         return None
 
     after_units  = " ".join(parts[1].strip().split("+")) if len(parts) >= 2 and parts[1].strip() else ""
@@ -997,7 +1008,7 @@ def _get_user_systemd_env(username: str) -> dict[str, str] | None:
     try:
         pw = pwd.getpwnam(username)
     except KeyError:
-        print(f"Error: 사용자 '{username}'를 찾을 수 없습니다.", file=sys.stderr)
+        print(tr("error.user_not_found", user=username), file=sys.stderr)
         return None
 
     env         = os.environ.copy()
@@ -1005,8 +1016,7 @@ def _get_user_systemd_env(username: str) -> dict[str, str] | None:
 
     if not Path(xdg_runtime).is_dir():
         print(
-            f"Error: XDG_RUNTIME_DIR '{xdg_runtime}' 가 존재하지 않습니다.\n"
-            f"  loginctl enable-linger {username} 을 실행했는지 확인하세요.",
+            tr("error.xdg_runtime_missing", path=xdg_runtime, user=username),
             file=sys.stderr,
         )
         return None
@@ -1018,8 +1028,7 @@ def _get_user_systemd_env(username: str) -> dict[str, str] | None:
             env["DBUS_SESSION_BUS_ADDRESS"] = f"unix:path={socket_path}"
         else:
             print(
-                "Error: D-Bus session bus 소켓을 찾을 수 없습니다.\n"
-                f"  loginctl enable-linger {username} 을 실행했는지 확인하세요.",
+                tr("error.dbus_socket_missing", user=username),
                 file=sys.stderr,
             )
             return None
@@ -1039,14 +1048,13 @@ def _ensure_linger(username: str) -> bool:
     if proc.returncode == 0 and "Linger=yes" in proc.stdout:
         return True
 
-    print(f"  linger 활성화 중 ({username})...", file=sys.stderr)
+    print(tr("service.enabling_linger", user=username), file=sys.stderr)
 
     cmd = _sudo_cmd() + ["loginctl", "enable-linger", username]
     proc = subprocess.run(cmd, capture_output=True, text=True)
     if proc.returncode != 0:
         print(
-            f"Warning: linger 활성화 실패 — 로그아웃 시 서비스가 중단될 수 있습니다.\n"
-            f"  수동 실행: sudo loginctl enable-linger {username}",
+            tr("warning.linger_failed", user=username),
             file=sys.stderr,
         )
         return False
@@ -1239,7 +1247,7 @@ def handle_install_as_service(
         dest_dir.mkdir(parents=True, exist_ok=True)
     else:
         if not _can_escalate():
-            print("Error: 서비스 설치에는 root 권한이 필요합니다.", file=sys.stderr)
+            print(tr("error.root_required_service_install"), file=sys.stderr)
             return 1
         store_dir = SYSTEM_SERVICE_STORE_DIR
         dest_dir  = SYSTEMD_UNIT_DIR
@@ -1323,18 +1331,18 @@ def handle_install_as_service(
             Path(tmp_bundle).unlink(missing_ok=True)
 
     # ── 완료 출력 ──────────────────────────────────────────────────────────
-    print(f"서비스 설치 완료 ({'user' if user_mode else 'system'}): {svc_name}.service")
-    print(f"  타입:   {svc_type}")
+    print(tr("service.install_complete", mode="user" if user_mode else "system", name=svc_name))
+    print(tr("label.type", value=svc_type))
     if after_units:
-        print(f"  After:  {after_units}")
+        print(tr("label.after", value=after_units))
     if before_units:
-        print(f"  Before: {before_units}")
-    print(f"  번들:   {stored_bundle}")
-    print(f"  유닛:   {dest} -> {stored_unit}")
+        print(tr("label.before", value=before_units))
+    print(tr("label.bundle", value=stored_bundle))
+    print(tr("label.unit", value=f"{dest} -> {stored_unit}"))
 
     if not enable or not start:
         flag = " --user" if user_mode else ""
-        print(f"\n활성화: systemctl{flag} enable --now {svc_name}.service")
+        print(tr("service.enable_command", flag=flag, name=svc_name))
     return 0
 
 
@@ -1421,28 +1429,28 @@ def handle_install_as_global_user_service(
                 capture_output=True, text=True,
             )
             if proc.returncode != 0:
-                print(f"Error: systemctl --global enable 실패: {proc.stderr}", file=sys.stderr)
+                print(tr("error.systemctl_global_enable_failed", error=proc.stderr), file=sys.stderr)
                 return proc.returncode
         else:
             if not _run_privileged(f"systemctl --global enable {shlex.quote(svc_name + '.service')}"):
                 return 1
 
-    print(f"글로벌 user 서비스 설치 완료: {svc_name}.service")
-    print(f"  타입:   {svc_type}")
+    print(tr("service.global_install_complete", name=svc_name))
+    print(tr("label.type", value=svc_type))
     if after_units:
-        print(f"  After:  {after_units}")
+        print(tr("label.after", value=after_units))
     if before_units:
-        print(f"  Before: {before_units}")
-    print(f"  번들:   {stored_bundle}")
-    print(f"  유닛:   {dest} -> {stored_unit}")
+        print(tr("label.before", value=before_units))
+    print(tr("label.bundle", value=stored_bundle))
+    print(tr("label.unit", value=f"{dest} -> {stored_unit}"))
 
     if start:
-        print("\n참고: --start 는 글로벌 user 서비스에 즉시 일괄 적용되지 않습니다.")
-        print(f"현재 사용자는 systemctl --user daemon-reload && systemctl --user start {svc_name}.service 로 시작할 수 있습니다.")
+        print(tr("service.global_start_note"))
+        print(tr("service.global_start_current_user_hint", name=svc_name))
     elif not enable:
-        print(f"\n활성화: sudo systemctl --global enable {svc_name}.service")
+        print(tr("service.global_enable_command", name=svc_name))
     else:
-        print("\n현재 로그인한 사용자는 systemctl --user daemon-reload 후 반영됩니다.")
+        print(tr("service.global_reload_note"))
     return 0
 
 
@@ -1455,11 +1463,11 @@ def handle_uninstall_as_global_user_service(apprunx: str) -> int:
     dest = SYSTEMD_GLOBAL_USER_UNIT_DIR / svc_name
 
     if not (dest.exists() or dest.is_symlink() or stored_unit.exists()):
-        print(f"Error: 서비스 파일이 존재하지 않습니다: {dest}", file=sys.stderr)
+        print(tr("error.service_file_missing", path=dest), file=sys.stderr)
         return 1
 
     if not _can_escalate():
-        print("Error: 글로벌 user 서비스 제거에는 root 권한이 필요합니다.", file=sys.stderr)
+        print(tr("error.root_required_global_user_remove"), file=sys.stderr)
         return 1
 
     if os.geteuid() == 0:
@@ -1476,9 +1484,9 @@ def handle_uninstall_as_global_user_service(apprunx: str) -> int:
         if not _run_privileged(script):
             return 1
 
-    print(f"글로벌 user 서비스 제거 완료: {svc_name}")
-    print("\n현재 로그인한 사용자는 systemctl --user daemon-reload 후 반영됩니다.")
-    print(f"실행 중인 인스턴스는 systemctl --user stop {svc_name} 로 중지할 수 있습니다.")
+    print(tr("service.global_remove_complete", name=svc_name))
+    print(tr("service.global_reload_note"))
+    print(tr("service.stop_running_hint", name=svc_name))
     return 0
 
 
@@ -1489,8 +1497,8 @@ def handle_uninstall_as_global_user_service(apprunx: str) -> int:
 def _normalize_gui_startup_scope(scope: str | None) -> str | None:
     resolved = "user" if scope is None else scope.strip().lower()
     if resolved not in ("user", "global"):
-        print("Error: --install-as-gui-startup 값은 user 또는 global 이어야 합니다.", file=sys.stderr)
-        print("사용법: --install-as-gui-startup[=user|global]", file=sys.stderr)
+        print(tr("error.gui_startup_scope"), file=sys.stderr)
+        print(tr("usage.gui_startup"), file=sys.stderr)
         return None
     return resolved
 
@@ -1511,7 +1519,7 @@ def _parse_startup_args(raw: str, option_name: str) -> list[str]:
     try:
         return shlex.split(value)
     except ValueError as exc:
-        print(f"Error: {option_name} 파싱 실패: {exc}", file=sys.stderr)
+        print(tr("error.option_parse_failed", option=option_name, error=exc), file=sys.stderr)
         sys.exit(2)
 
 
@@ -1547,7 +1555,7 @@ def _start_gui_startup_exec(exec_args: list[str | Path], username: str | None = 
         try:
             pw = pwd.getpwnam(username)
         except KeyError:
-            print(f"Error: 사용자 '{username}'를 찾을 수 없습니다.", file=sys.stderr)
+            print(tr("error.user_not_found", user=username), file=sys.stderr)
             return False
 
         if os.geteuid() == 0 and pw.pw_uid != 0:
@@ -1556,16 +1564,16 @@ def _start_gui_startup_exec(exec_args: list[str | Path], username: str | None = 
             elif shutil.which("sudo"):
                 cmd = ["sudo", "-u", username, *cmd]
             else:
-                print("Warning: runuser/sudo 를 찾을 수 없어 root 권한으로 즉시 실행을 건너뜁니다.", file=sys.stderr)
+                print(tr("warning.no_runuser_sudo"), file=sys.stderr)
                 return False
 
     try:
         subprocess.Popen(cmd, env=env, start_new_session=True)
     except OSError as exc:
-        print(f"Error: GUI 시작 프로그램 즉시 실행 실패: {exc}", file=sys.stderr)
+        print(tr("error.gui_startup_launch_failed", error=exc), file=sys.stderr)
         return False
 
-    print(f"GUI 시작 프로그램 즉시 실행: {_format_desktop_exec(exec_args)}")
+    print(tr("gui_startup.launched", cmd=_format_desktop_exec(exec_args)))
     return True
 
 
@@ -1606,7 +1614,7 @@ def handle_install_as_gui_startup(
         try:
             pwd.getpwnam(resolved_user)
         except KeyError:
-            print(f"Error: 사용자 '{resolved_user}'를 찾을 수 없습니다.", file=sys.stderr)
+            print(tr("error.user_not_found", user=resolved_user), file=sys.stderr)
             return 1
         store_dir = _user_gui_startup_store_dir(resolved_user)
         dest_dir  = _user_gui_startup_dir(resolved_user)
@@ -1637,13 +1645,13 @@ def handle_install_as_gui_startup(
         for path in (store_dir, dest_dir, stored_bundle, stored_desktop, dest):
             _chown_to_user(path, owner_user)
 
-    print(f"GUI 시작 프로그램 설치 완료 ({resolved_scope}): {desktop_name}")
-    print(f"  번들:   {stored_bundle}")
-    print(f"  항목:   {dest}")
+    print(tr("gui_startup.install_complete", scope=resolved_scope, name=desktop_name))
+    print(tr("label.bundle", value=stored_bundle))
+    print(tr("label.item", value=dest))
     if apprun_args:
-        print(f"  AppRun 인자: {' '.join(shlex.quote(arg) for arg in apprun_args)}")
+        print(tr("label.apprun_args", value=" ".join(shlex.quote(arg) for arg in apprun_args)))
     if run_args:
-        print(f"  실행 인자: {' '.join(shlex.quote(arg) for arg in run_args)}")
+        print(tr("label.run_args", value=" ".join(shlex.quote(arg) for arg in run_args)))
 
     if start and not _start_gui_startup_exec(exec_args, launch_user):
         return 1
@@ -1678,7 +1686,7 @@ def handle_uninstall_as_gui_startup(
         try:
             pwd.getpwnam(resolved_user)
         except KeyError:
-            print(f"Error: 사용자 '{resolved_user}'를 찾을 수 없습니다.", file=sys.stderr)
+            print(tr("error.user_not_found", user=resolved_user), file=sys.stderr)
             return 1
         store_dir = _user_gui_startup_store_dir(resolved_user)
         dest = _user_gui_startup_dir(resolved_user) / desktop_name
@@ -1686,11 +1694,11 @@ def handle_uninstall_as_gui_startup(
     stored_bundle, stored_desktop = _stored_gui_startup_paths(store_dir, desktop_base)
 
     if not (dest.exists() or stored_desktop.exists() or stored_bundle.exists()):
-        print(f"Error: GUI 시작 프로그램 파일이 존재하지 않습니다: {dest}", file=sys.stderr)
+        print(tr("error.gui_startup_file_missing", path=dest), file=sys.stderr)
         return 1
 
     _remove_paths([dest, stored_desktop, stored_bundle])
-    print(f"GUI 시작 프로그램 제거 완료 ({resolved_scope}): {desktop_name}")
+    print(tr("gui_startup.remove_complete", scope=resolved_scope, name=desktop_name))
     return 0
 
 # ==============================================================================
@@ -1702,7 +1710,7 @@ def handle_uninstall_services(apprunx: str) -> int:
     try:
         file_list = libapprun.list_files(apprunx)
     except Exception as e:
-        print(f"Error: 번들 파일 목록을 읽을 수 없습니다: {e}", file=sys.stderr)
+        print(tr("error.bundle_file_list_failed", error=e), file=sys.stderr)
         return 1
 
     service_files = [
@@ -1710,11 +1718,11 @@ def handle_uninstall_services(apprunx: str) -> int:
         if f.startswith("services/") and f.endswith(".service")
     ]
     if not service_files:
-        print("Error: 번들 내에 services/*.service 파일이 없습니다.", file=sys.stderr)
+        print(tr("error.no_service_files"), file=sys.stderr)
         return 1
 
     if not _can_escalate():
-        print("Error: 서비스 제거에는 root 권한이 필요합니다.", file=sys.stderr)
+        print(tr("error.root_required_service_remove"), file=sys.stderr)
         return 1
 
     removed = []
@@ -1722,16 +1730,16 @@ def handle_uninstall_services(apprunx: str) -> int:
         dest = SYSTEMD_UNIT_DIR / svc_name
         stored_unit = SYSTEM_SERVICE_STORE_DIR / svc_name
         if not (dest.exists() or dest.is_symlink() or stored_unit.exists()):
-            print(f"  건너뜀 (미설치): {svc_name}")
+            print(tr("service.skipped_not_installed", name=svc_name))
             continue
 
         _systemctl_stop_disable(svc_name)
         _remove_paths([dest, stored_unit], use_privilege=True)
         removed.append(svc_name)
-        print(f"  제거됨: {svc_name}")
+        print(tr("service.removed_item", name=svc_name))
 
     _systemctl_daemon_reload()
-    print(f"\n{len(removed)}개 서비스 파일 제거 완료.")
+    print(tr("service.remove_complete_count", count=len(removed)))
     return 0
 
 
@@ -1762,7 +1770,7 @@ def handle_uninstall_as_service(apprunx: str, user: str | None) -> int:
     stored_bundle, stored_unit = _stored_service_paths(store_dir, svc_base)
 
     if not (dest.exists() or dest.is_symlink() or stored_unit.exists()):
-        print(f"Error: 서비스 파일이 존재하지 않습니다: {dest}", file=sys.stderr)
+        print(tr("error.service_file_missing", path=dest), file=sys.stderr)
         return 1
 
     if user_mode:
@@ -1774,7 +1782,7 @@ def handle_uninstall_as_service(apprunx: str, user: str | None) -> int:
         _systemctl_daemon_reload(user_mode=True, env=user_env)
     else:
         if not _can_escalate():
-            print("Error: 서비스 제거에는 root 권한이 필요합니다.", file=sys.stderr)
+            print(tr("error.root_required_service_remove"), file=sys.stderr)
             return 1
         if not _run_privileged(
                 f"systemctl stop {svc_name}; "
@@ -1787,7 +1795,7 @@ def handle_uninstall_as_service(apprunx: str, user: str | None) -> int:
             return 1
 
     mode_label = "user" if user_mode else "system"
-    print(f"서비스 제거 완료 ({mode_label}): {svc_name}")
+    print(tr("service.remove_complete", mode=mode_label, name=svc_name))
     return 0
 
 
@@ -1805,7 +1813,7 @@ def _run_privileged(script: str) -> bool:
         capture_output=True, text=True,
     )
     if proc.returncode != 0:
-        print(f"Error: 명령 실행 실패:\n{proc.stderr}", file=sys.stderr)
+        print(tr("error.command_failed", error=proc.stderr), file=sys.stderr)
     return proc.returncode == 0
 
 
@@ -1859,7 +1867,7 @@ def _systemctl_batch(
                 capture_output=True, text=True, env=env,
             )
             if proc.returncode != 0:
-                print(f"Error: systemctl --user {action} 실패: {proc.stderr}", file=sys.stderr)
+                print(tr("error.systemctl_user_failed", action=action, error=proc.stderr), file=sys.stderr)
                 return proc.returncode
         return 0
 
@@ -1894,107 +1902,8 @@ def _remove_unit_file(path: Path) -> None:
 # 도움말
 # ==============================================================================
 
-HELP_TEXT = """\
-apprun3 — AppRun Format 3 실행기 및 유틸리티
-
-사용법:
-    apprun3 [--flags] <apprunx> [앱 인자...]
-
-flags 없이 실행하면 번들을 실행합니다.
-flags 가 있으면 해당 작업을 수행하고 종료합니다.
-
-정보 조회:
-    --id                        번들 ID 출력
-    --is-format3                Format 3 여부 출력 (true/false)
-    --info                      전체 메타데이터 출력
-    --info=key1,key2,...        지정한 키만 출력
-    --box-path                  Box 디렉터리 경로 출력
-
-준비 및 등록:
-    --prepare                   실행 환경 준비 (마운트, venv, 의존성 설치)
-    --register                  --prepare 수행 후 .desktop 파일 등록
-    --portable[=mount,box]      Box 와/또는 마운트 포인트를 .apprunx 옆
-                                <id>.apprunx.data.d 아래에 생성
-                                값 생략 시 mount,box 모두 portable 적용
-    --inherit[=venv,data,full]  기존 ~/.local/apprun/boxes/<id> 내용을
-                                portable Box 로 복사
-                                값 생략 시 full 적용
-
-파일 추출:
-    --extract-file-from=<내부경로> --extract-file-to=<대상경로>
-                                번들 내 파일을 지정 경로로 추출
-                                (두 옵션은 반드시 함께 사용)
-
-서비스 관리:
-    --install-services          번들 내 services/*.service 파일을
-                                /usr/share/services.apprd/system 에 복사 후
-                                /etc/systemd/system/ 에 링크
-                                --enable: [추가 옵션] 설치 과정에서 자동으로 활성화
-                                --start : [추가 옵션] 설치 과정에서 자동으로 시작 (자동으로 활성화 트리거)
-
-    --uninstall-services        번들 내 services/*.service 에 해당하는
-                                시스템 서비스를 중지·비활성화·삭제
-
-    --install-as-service=<type>,<after>,<before>
-                                지정 설정으로 systemd 서비스를 생성하여 설치
-                                  type  : [필수] simple, oneshot, forking, notify, idle
-                                  after : [선택] After= 유닛 (+ 로 구분)
-                                  before: [선택] Before= 유닛 (+ 로 구분)
-                                예: --install-as-service=oneshot,network.target,multi-user.target                                  
-                                --enable: [추가 옵션] 설치 과정에서 자동으로 활성화
-                                --start : [추가 옵션] 설치 과정에서 자동으로 시작 (자동으로 활성화 트리거)
-
-    --install-as-global-user-service[=<type>,<after>,<before>]
-                                /usr/share/services.apprd/global 에 복사 후
-                                /etc/systemd/user 에 global user 서비스를 링크
-                                  type 생략 시 simple
-                                  --enable: systemctl --global enable 수행
-
-    --uninstall-as-global-user-service
-                                --install-as-global-user-service 로 생성된
-                                global user 서비스를 비활성화·삭제
-
-    --uninstall-as-service      --install-as-service 로 생성된 서비스를
-                                중지·비활성화·삭제
-
-    --install-as-gui-startup[=user|global]
-                                GUI 로그인 시 실행되도록 .desktop autostart 항목 생성
-                                  user 생략 시 현재 사용자 ~/.config/autostart
-                                  --user=<사용자> 로 특정 사용자 지정 가능
-                                  global 은 /etc/xdg/autostart 에 생성
-                                  --apprunargs=<args> 는 apprun3 앞쪽 인자 추가
-                                  --runargs-start=<args> 는 번들 뒤 앱 실행 인자 추가
-                                  --apprunarg=<arg>, --runarg=<arg> 반복 가능
-                                  --start: 등록 직후 생성된 Exec 명령을 즉시 실행
-
-    --uninstall-as-gui-startup[=user|global]
-                                --install-as-gui-startup 로 생성된
-                                .desktop autostart 항목 삭제
-
-기타:
-    --help, -h                  이 도움말 출력
-
-예시:
-    apprun3 my-app.apprunx                          번들 실행
-    apprun3 my-app.apprunx --verbose --port 8080    앱에 인자 전달
-    apprun3 --id my-app.apprunx                     번들 ID 확인
-    apprun3 --info=name,version my-app.apprunx      이름과 버전 확인
-    apprun3 --prepare my-app.apprunx                실행 환경만 준비
-    apprun3 --portable my-app.apprunx               Box 와 마운트를 번들 옆에 생성
-    apprun3 --portable=box --inherit=venv my-app.apprunx
-    apprun3 --register my-app.apprunx               데스크톱 등록
-    apprun3 --install-as-service=oneshot,plymouth-quit-wait.service+systemd-user-sessions.service,network.target my-app.apprunx
-    apprun3 --install-as-global-user-service=simple --enable my-app.apprunx
-    apprun3 --uninstall-as-global-user-service my-app.apprunx
-    apprun3 --install-as-gui-startup=user my-app.apprunx
-    apprun3 --install-as-gui-startup=global my-app.apprunx
-    apprun3 --install-as-gui-startup --runargs-start=--arg1=x,--arg2=y,arg3 my-app.apprunx
-    apprun3 --install-as-gui-startup --start my-app.apprunx
-"""
-
-
 def handle_help() -> int:
-    print(HELP_TEXT, end="")
+    print(tr("help.apprun3"), end="")
     return 0
 
 
@@ -2087,7 +1996,7 @@ def parse_args(argv: list[str]):
         elif arg == "--uninstall-as-service":
             flags["uninstall_as_service"] = True
         else:
-            print(f"Error: 알 수 없는 옵션 '{arg}'", file=sys.stderr)
+            print(tr("error.unknown_option", option=arg), file=sys.stderr)
             sys.exit(2)
 
         remaining.pop(i)
@@ -2098,7 +2007,7 @@ def parse_args(argv: list[str]):
     has_from = "extract_file_from" in flags
     has_to   = "extract_file_to"   in flags
     if has_from != has_to:
-        print("Error: --extract-file-from 과 --extract-file-to 는 함께 사용해야 합니다.", file=sys.stderr)
+        print(tr("error.extract_options_together"), file=sys.stderr)
         sys.exit(2)
 
     has_gui_startup_args = (
@@ -2106,11 +2015,11 @@ def parse_args(argv: list[str]):
         or "gui_startup_run_args" in flags
     )
     if has_gui_startup_args and "install_as_gui_startup" not in flags:
-        print("Error: --apprunargs/--runargs-start 는 --install-as-gui-startup 와 함께 사용해야 합니다.", file=sys.stderr)
+        print(tr("error.startup_args_require_install"), file=sys.stderr)
         sys.exit(2)
 
     if not remaining:
-        print("Usage: apprun3 [--flags] <apprunx> [args...]", file=sys.stderr)
+        print(tr("usage.apprun3_short"), file=sys.stderr)
         sys.exit(2)
 
     return flags, remaining[0], remaining[1:]
@@ -2127,7 +2036,7 @@ def main():
         sys.exit(handle_help())
 
     if not Path(apprunx).exists():
-        print(f"Error: 파일을 찾을 수 없습니다: {apprunx}", file=sys.stderr)
+        print(tr("error.file_not_found", path=apprunx), file=sys.stderr)
         sys.exit(1)
 
     if flags:

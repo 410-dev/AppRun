@@ -16,8 +16,12 @@ import subprocess
 import tempfile
 from pathlib import Path
 
+LOCAL_DIST_PACKAGES = Path(__file__).resolve().parents[1] / "lib/python3/dist-packages"
 sys.path.insert(0, "/usr/lib/python3/dist-packages")
+if LOCAL_DIST_PACKAGES.exists():
+    sys.path.insert(0, str(LOCAL_DIST_PACKAGES))
 import libapprun
+from apprun_i18n import tr
 
 DEFAULT_ICON = "/usr/share/apprun/default-icon.png"
 BADGE_ICON   = "/usr/share/apprun/badge.png"
@@ -25,7 +29,7 @@ BADGE_ICON   = "/usr/share/apprun/badge.png"
 
 def main():
     if len(sys.argv) < 4:
-        print("Usage: apprunx-thumbnailer <input> <output> <size>", file=sys.stderr)
+        print(tr("thumbnailer.usage"), file=sys.stderr)
         sys.exit(1)
 
     apprunx = sys.argv[1]
@@ -44,7 +48,7 @@ def main():
 def _check_deps() -> bool:
     import shutil
     if not shutil.which("convert"):
-        print("Error: imagemagick (convert) 가 필요합니다.", file=sys.stderr)
+        print(tr("thumbnailer.convert_required"), file=sys.stderr)
         return False
     return True
 

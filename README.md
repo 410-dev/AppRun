@@ -19,6 +19,8 @@ apprun3 --portable MyApp.apprunx
 apprun3 --portable=box --inherit=venv MyApp.apprunx
 ```
 
+CLI, 알림, GUI 다이얼로그 메시지는 시스템 locale 에 따라 출력됩니다. 테스트 시에는 `APPRUN_LANG=en apprun3 --help` 처럼 강제할 수 있고, 언어 파일은 `/usr/share/apprun/lang/*.json` 에 있습니다.
+
 `apprun` 명령은 3.x 계열 설치 호환성을 위해 남아 있지만, 문서와 신규 사용법은 `apprun3` 를 기준으로 합니다.
 
 번들 디렉터리는 `apprun3-package` 로 `.apprunx` 파일로 패키징합니다:
