@@ -4,13 +4,14 @@ apprun3-package — AppRun Format 3 패키징 도구
 /usr/bin/apprun3-package
 
 Usage:
-    apprun3-package <bundle path> [-o <output path>] [--prefer speed|size|balanced]
+    apprun3-package <bundle path> [-o <output path>] [--prefer speed|size|balanced] [--force]
 
 Options:
     -o <path>               출력 경로 (기본값: <bundle name>.apprunx)
     --prefer speed          lz4  — 빠른 압축/해제, 큰 파일
     --prefer size           xz   — 느린 압축, 작은 파일
     --prefer balanced       zstd — 속도/크기 균형 (기본값)
+    --force                 기존 출력 파일을 덮어쓰기
 """
 
 import sys
@@ -25,6 +26,7 @@ sys.path.insert(0, "/usr/lib/python3/dist-packages")
 if LOCAL_DIST_PACKAGES.exists():
     sys.path.insert(0, str(LOCAL_DIST_PACKAGES))
 import libapprun
+from apprun_validation import ValidationError, validate_app_id
 from apprun_i18n import tr
 
 
@@ -63,6 +65,11 @@ def validate_bundle(bundle: str) -> list[str]:
     # 필수: AppRunMeta/id
     if not (b / "AppRunMeta" / "id").exists():
         errors.append(tr("package.error.id_missing"))
+    else:
+        try:
+            validate_app_id((b / "AppRunMeta" / "id").read_text().strip())
+        except (OSError, ValidationError) as exc:
+            errors.append(str(exc))
 
     # 필수: entry point
     meta = libapprun.get_bundle_meta(bundle)
@@ -95,7 +102,7 @@ def validate_bundle(bundle: str) -> list[str]:
 # 패키징
 # ==============================================================================
 
-def package(bundle: str, output: str, prefer: str) -> int:
+def package(bundle: str, output: str, prefer: str, force: bool = False) -> int:
     b = Path(bundle)
 
     print(tr("package.title"))
@@ -119,6 +126,9 @@ def package(bundle: str, output: str, prefer: str) -> int:
     # --- 기존 출력 파일 처리 ---
     out = Path(output)
     if out.exists():
+        if not force:
+            print(tr("package.error_output_exists", path=out), file=sys.stderr)
+            return 1
         print(tr("package.removing_existing", path=out))
         out.unlink()
 
@@ -178,7 +188,7 @@ def _print_result(bundle: str, output: str) -> None:
 def _dir_size(path: str) -> int:
     total = 0
     for f in Path(path).rglob("*"):
-        if f.is_file():
+        if f.is_file() and not f.is_symlink():
             total += f.stat().st_size
     return total
 
@@ -230,6 +240,11 @@ def parse_args(argv: list[str]):
         default=DEFAULT_PREFER,
         help=tr("package.arg.prefer")
     )
+    parser.add_argument(
+        "--force",
+        action="store_true",
+        help=tr("package.arg.force")
+    )
     return parser.parse_args(argv)
 
 
@@ -263,7 +278,7 @@ def main():
     if not output.endswith(".apprunx"):
         print(tr("package.warning_extension", path=output))
 
-    sys.exit(package(bundle, output, args.prefer))
+    sys.exit(package(bundle, output, args.prefer, force=args.force))
 
 
 if __name__ == "__main__":

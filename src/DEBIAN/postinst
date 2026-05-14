@@ -2,30 +2,9 @@
 
 set -e
 
-if [ ! -f "/usr/local/bin/uv" ]; then
-    curl -LsSf https://astral.sh/uv/install.sh | sh
-    # Ensure the uv binary is executable
-    chmod +x "$HOME/.local/bin/uv"
-
-
-	# Move $HOME/.local/bin/uv to /usr/local/bin/uv
-	if [ -f "$HOME/.local/bin/uv" ]; then
-		mv "$HOME/.local/bin/uv" /usr/local/bin/uv
-	else
-		echo "Error: uv was not found in $HOME/.local/bin/uv"
-		exit 1
-	fi
-
-	# Move $HOME/.local/bin/uvx to /usr/local/bin/uvx
-	if [ -f "$HOME/.local/bin/uvx" ]; then
-		mv "$HOME/.local/bin/uvx" /usr/local/bin/uvx
-	else
-		echo "Error: uvx was not found in $HOME/.local/bin/uvx"
-		exit 1
-	fi
-
-else
-    echo "uv is already installed in /usr/local/bin/uv"
+if ! command -v uv >/dev/null 2>&1; then
+    echo "Error: uv is required but is not installed. Install the distribution uv package before configuring AppRun." >&2
+    exit 1
 fi
 
 
@@ -64,10 +43,9 @@ ln -fs "/usr/lib/AppRun/libs/AppContext.py" "/usr/lib/python3/dist-packages/AppC
 
 # Update the MIME database and icon caches, and clear thumbnail cache
 set +e
-sudo update-mime-database /usr/share/mime
-sudo update-icon-caches /usr/share/icons
-sudo update-desktop-database /usr/share/applications
+update-mime-database /usr/share/mime
+update-icon-caches /usr/share/icons
+update-desktop-database /usr/share/applications
 xdg-mime default apprun3.desktop application/x-apprunx
-rm -rf ~/.cache/thumbnails/
 
 echo "Please restart Nautilus using 'nautilus -q && nautilus &' to apply the changes."

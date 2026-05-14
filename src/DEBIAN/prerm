@@ -1,6 +1,6 @@
 #!/bin/bash
 
-/usr/bin/apprun3 --uninstall-as-service /usr/lib/AppRun/AppRunDropinService.apprunx
+/usr/bin/apprun3 --uninstall-as-service /usr/lib/AppRun/AppRunDropInService.apprunx
 
 
 lns=(

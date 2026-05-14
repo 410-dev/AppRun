@@ -256,7 +256,7 @@ class AppContext:
         return self._entry_script_path
 
     def file_in_box(self, subpath: str) -> str:
-        return os.path.join(self.box(), subpath)
+        return self._resolve_box_path(subpath)
 
     def has_file_in_box(self, filename: str) -> bool:
         # AppRun Box 내에 파일이 존재하는지 여부 반환
@@ -264,7 +264,7 @@ class AppContext:
             digest = hashlib.sha256(filename.encode()).hexdigest()
             filename = digest
 
-        file_path = os.path.join(self._apprun_box_path, filename)
+        file_path = self._resolve_box_path(filename)
         return os.path.isfile(file_path)
 
     def list_file_in_box_structured(
@@ -357,6 +357,50 @@ class AppContext:
                     return False
         return True
 
+    def _resolve_box_path(self, filename: str) -> str:
+        """
+        Resolve a caller-supplied box path and require it to stay inside the box.
+
+        AppContext exposes box-scoped file APIs.  Absolute paths, ``..``
+        traversal, NUL bytes, and symlink escapes are rejected so the API keeps
+        that contract even when bundle code receives untrusted filenames.
+        """
+        if not isinstance(filename, str):
+            raise TypeError("filename must be a string")
+        if "\x00" in filename:
+            raise ValueError("filename contains a NUL byte")
+
+        requested = Path(filename)
+        if requested.is_absolute() or any(part in ("", ".", "..") for part in requested.parts):
+            raise ValueError(f"Path escapes AppRun box: {filename!r}")
+
+        box_root = Path(self._apprun_box_path).resolve()
+        candidate = box_root.joinpath(requested)
+
+        if candidate.exists() or candidate.is_symlink():
+            resolved_candidate = candidate.resolve()
+            if resolved_candidate != box_root and box_root not in resolved_candidate.parents:
+                raise ValueError(f"Path escapes AppRun box: {filename!r}")
+            if candidate.is_symlink():
+                raise ValueError(f"Refusing symlink in AppRun box path: {filename!r}")
+            return str(resolved_candidate)
+
+        # Existing parents are resolved to catch symlink escapes before write.
+        existing_parent = candidate.parent
+        missing_parts = []
+        while not existing_parent.exists() and existing_parent != box_root:
+            missing_parts.append(existing_parent.name)
+            existing_parent = existing_parent.parent
+        resolved_parent = existing_parent.resolve()
+        if resolved_parent != box_root and box_root not in resolved_parent.parents:
+            raise ValueError(f"Path escapes AppRun box: {filename!r}")
+
+        final_path = resolved_parent
+        for part in reversed(missing_parts):
+            final_path = final_path / part
+        final_path = final_path / requested.name
+        return str(final_path)
+
     def write(self, filename: str, data: bytes) -> str:
 
         if not self._io_accessible(filename, 'write'):
@@ -369,7 +413,7 @@ class AppContext:
             digest = hashlib.sha256(filename.encode()).hexdigest()
             filename = digest
 
-        file_path = os.path.join(self._apprun_box_path, filename)
+        file_path = self._resolve_box_path(filename)
 
         # 상위 디렉터리 생성 보장 (box 경로 내 서브디렉터리에 쓸 수 있도록)
         os.makedirs(os.path.dirname(file_path), exist_ok=True)
@@ -398,17 +442,12 @@ class AppContext:
             digest = hashlib.sha256(filename.encode()).hexdigest()
             filename = digest
 
-        file_path = os.path.join(self._apprun_box_path, filename)
+        file_path = self._resolve_box_path(filename)
         with open(file_path, 'rb') as f:
             data = f.read()
 
-        # Check if data is string decodable
-        try:
-            if file_should_be_copied_to_cache:
-                decoded = data.decode('utf-8')  # 문자열로 디코딩 시도, 실패하면 예외 발생
-                self._xmem["APPCONTEXT_FILEIO_RAMFS_CACHE"][filename] = decoded
-        except UnicodeDecodeError:
-            pass  # Binary data, ignore
+        if file_should_be_copied_to_cache:
+            self._xmem["APPCONTEXT_FILEIO_RAMFS_CACHE"][filename] = data
 
         return data
 
@@ -485,7 +524,9 @@ class AppContext:
         import sys
         import subprocess
 
-        icon_path = os.path.join(self._bundle_path, "AppRunMeta", "DesktopLink", "Icon.png")
+        icon_path = os.path.join(self._bundle_path, "AppRunMeta", "DesktopLinks", "Icon.png")
+        if not os.path.isfile(icon_path):
+            icon_path = os.path.join(self._bundle_path, "AppRunMeta", "DesktopLink", "Icon.png")
 
         if not os.path.isfile(icon_path):
             return False
@@ -599,7 +640,9 @@ class AppContext:
             wait_for_input = os.isatty(sys.stdin.fileno()) and os.isatty(sys.stdout.fileno())
 
             # 번들에서 AppRunMeta/DesktopLink/Terminal 파일이 존재하고 내부 값이 true 면 대기
-            terminal_flag_path = os.path.join(self._apprun_box_path, 'AppRunMeta', 'DesktopLink', 'Terminal')
+            terminal_flag_path = os.path.join(self._apprun_box_path, 'AppRunMeta', 'DesktopLinks', 'Terminal')
+            if not os.path.isfile(terminal_flag_path):
+                terminal_flag_path = os.path.join(self._apprun_box_path, 'AppRunMeta', 'DesktopLink', 'Terminal')
             if os.path.isfile(terminal_flag_path):
                 try:
                     flag_value = self.read_str(terminal_flag_path).strip().lower()

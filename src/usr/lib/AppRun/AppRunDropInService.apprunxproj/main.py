@@ -21,6 +21,9 @@ from typing import Optional
 
 sys.path.insert(0, "/usr/lib/python3/dist-packages")
 import libapprun
+from apprun_desktop import build_desktop_entry, build_desktop_from_meta, parse_bundled_desktop
+from apprun_safeio import write_file_no_symlink
+from apprun_validation import ValidationError, sanitize_identifier, validate_app_id
 
 try:
     import pyinotify
@@ -121,7 +124,16 @@ def load_config() -> dict:
             return {"global": [], "user": []}
 
     with open(config_path, "r") as f:
-        return json.load(f)
+        raw = json.load(f)
+
+    config = {"global": [], "user": []}
+    for key in ("global", "user"):
+        values = raw.get(key, [])
+        if not isinstance(values, list):
+            print(f"WARNING: 설정 키 {key} 는 배열이어야 합니다. 무시합니다.", file=sys.stderr)
+            continue
+        config[key] = [str(item) for item in values if isinstance(item, str) and "\x00" not in item]
+    return config
 
 
 def resolve_watch_dirs(config: dict, users: list[UserInfo]) -> dict[str, list[UserInfo]]:
@@ -182,8 +194,10 @@ def load_cache() -> dict:
 
 def save_cache(cache: dict) -> None:
     Path(CACHE_BASE).mkdir(parents=True, exist_ok=True)
-    with open(CACHE_FILE, "w") as f:
+    tmp = CACHE_FILE.with_suffix(".json.tmp")
+    with open(tmp, "w") as f:
         json.dump(cache, f, indent=2)
+    tmp.replace(CACHE_FILE)
 
 
 # ==============================================================================
@@ -203,39 +217,33 @@ def _write_as_user(path: Path, content: str | bytes, user: UserInfo, mode: int =
     파일을 쓴 뒤 소유권을 해당 사용자로 변경.
     상위 디렉터리가 없으면 생성하고 소유권도 변경.
     """
-    path.parent.mkdir(parents=True, exist_ok=True)
-    # 상위 디렉터리 소유권 보정 (root 가 만들었으므로)
     _chown_parents(path, user)
-
-    if isinstance(content, bytes):
-        path.write_bytes(content)
-    else:
-        path.write_text(content)
-    path.chmod(mode)
-    os.chown(str(path), user.uid, -1)
+    data = content if isinstance(content, bytes) else content.encode("utf-8")
+    write_file_no_symlink(path, data, mode=mode, uid=user.uid)
+    _chown_parents(path, user)
 
 
 def _chown_parents(path: Path, user: UserInfo) -> None:
     """
     path 의 상위 디렉터리 중 사용자 홈 하위에 있는 것들의 소유권을 보정.
     """
-    home_str = str(user.home)
+    home = user.home.resolve()
     current = path.parent
     dirs_to_fix = []
-    while str(current).startswith(home_str) and current != user.home:
+    while current != user.home and (current.resolve() == home or home in current.resolve().parents):
         dirs_to_fix.append(current)
         current = current.parent
     for d in reversed(dirs_to_fix):
         if d.exists():
             try:
-                os.chown(str(d), user.uid, -1)
+                os.chown(str(d), user.uid, -1, follow_symlinks=False)
             except OSError:
                 pass
 
 
 def _unlink_if_exists(path: Path) -> None:
     try:
-        if path.exists():
+        if path.exists() or path.is_symlink():
             path.unlink()
     except OSError:
         pass
@@ -251,49 +259,22 @@ def _build_desktop_content(
     app_id: str,
     icon_extracted: bool,
 ) -> str:
-    """
-    .desktop 파일 원본 바이트를 받아 Exec, Icon, StartupWMClass 를 처리한
-    최종 텍스트를 반환.
-    """
-    desktop_text = desktop_data.decode("utf-8", errors="replace")
-    lines = desktop_text.splitlines()
-
-    # Exec 처리
-    processed = []
-    has_exec = False
-    for line in lines:
-        if line.strip().startswith("Exec="):
-            has_exec = True
-            processed.append(f"Exec=apprun3 {apprunx_path}")
-        else:
-            processed.append(line)
-    if not has_exec:
-        processed.append(f"Exec=apprun3 {apprunx_path}")
-
-    # Icon 처리
-    final = []
-    has_icon = False
-    for line in processed:
-        if line.strip().startswith("Icon="):
-            has_icon = True
-            if icon_extracted:
-                final.append(f"Icon=apprun-{app_id}")
-            else:
-                final.append(line)
-        else:
-            final.append(line)
-
-    if not has_icon:
-        if icon_extracted:
-            final.append(f"Icon=apprun-{app_id}")
-        else:
-            final.append("Icon=apprun-default")
-
-    # StartupWMClass
-    if not any(l.strip().startswith("StartupWMClass=") for l in final):
-        final.append(f"StartupWMClass={app_id}")
-
-    return "\n".join(final) + "\n"
+    """Build a sanitized .desktop file from an allowlisted bundled entry."""
+    extra = parse_bundled_desktop(desktop_data)
+    name = extra.pop("Name", app_id)
+    comment = extra.pop("Comment", "")
+    icon = f"apprun-{app_id}" if icon_extracted else "apprun-default"
+    categories = extra.pop("Categories", "Application;")
+    return build_desktop_entry(
+        app_id=app_id,
+        name=name,
+        comment=comment,
+        exec_args=["apprun3", apprunx_path],
+        icon=icon,
+        terminal=False,
+        categories=categories,
+        extra=extra,
+    )
 
 def _generate_desktop_from_meta(apprunx_path: str) -> Optional[bytes]:
     """
@@ -304,39 +285,31 @@ def _generate_desktop_from_meta(apprunx_path: str) -> Optional[bytes]:
     if not meta:
         return None
 
-    name = meta.get("name", "").strip()
+    name = meta.get("name", "")
+    if not isinstance(name, str):
+        return None
+    name = name.strip()
     if not name:
         return None
 
     try:
-        app_id = libapprun.get_bundle_id(apprunx_path)
+        app_id = validate_app_id(libapprun.get_bundle_id(apprunx_path))
     except Exception:
-        app_id = Path(apprunx_path).stem
+        app_id = sanitize_identifier(Path(apprunx_path).stem)
 
-    app_type    = meta.get("type", "Application")
-    description = meta.get("description", "")
-    terminal    = "true" if meta.get("launch_in_terminal", False) else "false"
     args_launch = meta.get("desktopfile-args", [])
-
-    # 각 args 에 quotation 으로 감싸기
-    for i, arg in enumerate(args_launch):
-        if not (arg.startswith('"') and arg.endswith('"')):
-            args_launch[i] = f'"{arg}"'
-
-    lines = [
-        "[Desktop Entry]",
-        f"Name={name}",
-        f"Type={app_type}",
-        f"Exec=apprun3 {apprunx_path} {' '.join(args_launch)}",
-        f"Terminal={terminal}",
-        f"StartupWMClass={app_id}",
-        "Categories=Application;",
-    ]
-
-    if description:
-        lines.append(f"Comment={description}")
-
-    return ("\n".join(lines) + "\n").encode("utf-8")
+    if isinstance(args_launch, str):
+        args_launch = [args_launch]
+    if not isinstance(args_launch, list):
+        args_launch = []
+    exec_args = ["apprun3", apprunx_path, *[str(arg) for arg in args_launch if isinstance(arg, str)]]
+    content = build_desktop_from_meta(
+        app_id=app_id,
+        meta=meta,
+        exec_args=exec_args,
+        icon=f"apprun-{app_id}",
+    )
+    return content.encode("utf-8") if content else None
 
 def register_desktop(
     apprunx_path: str,
@@ -376,9 +349,10 @@ def register_desktop(
 
     # 번들 ID
     try:
-        app_id = libapprun.get_bundle_id(apprunx_path)
-    except Exception:
-        app_id = Path(apprunx_path).stem
+        app_id = validate_app_id(libapprun.get_bundle_id(apprunx_path))
+    except Exception as exc:
+        print(f"[DropIn] 경고: 안전하지 않은 앱 ID, 등록 건너뜀: {exc}", file=sys.stderr)
+        return False
 
     # 아이콘 추출 (임시)
     icon_data: Optional[bytes] = None
@@ -397,7 +371,7 @@ def register_desktop(
 
         desktop_file = user.desktop_dir / f"apprun-dropin-{app_id}.desktop"
         try:
-            _write_as_user(desktop_file, content, user, mode=0o755)
+            _write_as_user(desktop_file, content, user, mode=0o644)
         except OSError as e:
             print(f"[DropIn] 경고: {user.username} .desktop 쓰기 실패: {e}", file=sys.stderr)
             continue
@@ -446,7 +420,11 @@ def unregister_desktop(apprunx_path: str, cache: dict) -> bool:
     if not cached:
         return False
 
-    app_id = cached.get("app_id", "")
+    try:
+        app_id = validate_app_id(cached.get("app_id", ""))
+    except ValidationError:
+        del cache[apprunx_path]
+        return True
     registered = cached.get("registered_users", [])
 
     # 등록된 사용자들에게서 파일 삭제
@@ -544,10 +522,13 @@ class ApprunxEventHandler(pyinotify.ProcessEvent):
         if not self._is_apprunx(event):
             return
         time.sleep(0.5)
-        path = self._resolve(event)
-        users = self._users_for_event(event)
-        if users and Path(path).exists() and register_desktop(path, users, self._cache):
-            save_cache(self._cache)
+        try:
+            path = self._resolve(event)
+            users = self._users_for_event(event)
+            if users and Path(path).exists() and register_desktop(path, users, self._cache):
+                save_cache(self._cache)
+        except Exception as exc:
+            print(f"[DropIn] 경고: 이벤트 처리 실패: {exc}", file=sys.stderr)
 
     def process_IN_MOVED_TO(self, event):
         self.process_IN_CREATE(event)
@@ -555,17 +536,23 @@ class ApprunxEventHandler(pyinotify.ProcessEvent):
     def process_IN_CLOSE_WRITE(self, event):
         if not self._is_apprunx(event):
             return
-        path = self._resolve(event)
-        users = self._users_for_event(event)
-        if users and Path(path).exists() and register_desktop(path, users, self._cache):
-            save_cache(self._cache)
+        try:
+            path = self._resolve(event)
+            users = self._users_for_event(event)
+            if users and Path(path).exists() and register_desktop(path, users, self._cache):
+                save_cache(self._cache)
+        except Exception as exc:
+            print(f"[DropIn] 경고: 이벤트 처리 실패: {exc}", file=sys.stderr)
 
     def process_IN_DELETE(self, event):
         if not self._is_apprunx(event):
             return
-        path = self._resolve(event)
-        if unregister_desktop(path, self._cache):
-            save_cache(self._cache)
+        try:
+            path = self._resolve(event)
+            if unregister_desktop(path, self._cache):
+                save_cache(self._cache)
+        except Exception as exc:
+            print(f"[DropIn] 경고: 이벤트 처리 실패: {exc}", file=sys.stderr)
 
     def process_IN_MOVED_FROM(self, event):
         self.process_IN_DELETE(event)
@@ -614,7 +601,7 @@ def _chown_recursive(path: Path, user: UserInfo) -> None:
     home_str = str(user.home)
     # path 자체
     try:
-        os.chown(str(path), user.uid, -1)
+        os.chown(str(path), user.uid, -1, follow_symlinks=False)
     except OSError:
         pass
 
@@ -622,7 +609,7 @@ def _chown_recursive(path: Path, user: UserInfo) -> None:
     current = path.parent
     while str(current).startswith(home_str + "/") and current != user.home:
         try:
-            os.chown(str(current), user.uid, -1)
+            os.chown(str(current), user.uid, -1, follow_symlinks=False)
         except OSError:
             pass
         current = current.parent

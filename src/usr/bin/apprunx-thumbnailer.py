@@ -25,6 +25,8 @@ from apprun_i18n import tr
 
 DEFAULT_ICON = "/usr/share/apprun/default-icon.png"
 BADGE_ICON   = "/usr/share/apprun/badge.png"
+MAX_ICON_BYTES = 8 * 1024 * 1024
+MAX_THUMB_SIZE = 512
 
 
 def main():
@@ -34,7 +36,7 @@ def main():
 
     apprunx = sys.argv[1]
     output  = sys.argv[2]
-    size    = sys.argv[3]
+    size    = _parse_size(sys.argv[3])
 
     # convert 확인
     if not _check_deps():
@@ -53,6 +55,14 @@ def _check_deps() -> bool:
     return True
 
 
+def _parse_size(raw: str) -> int:
+    try:
+        value = int(raw)
+    except ValueError:
+        return 128
+    return max(16, min(value, MAX_THUMB_SIZE))
+
+
 def _extract_icon(apprunx: str, tmpdir: str) -> str:
     """
     아이콘 추출 시도.
@@ -61,15 +71,18 @@ def _extract_icon(apprunx: str, tmpdir: str) -> str:
     dest = str(Path(tmpdir) / "icon.png")
     try:
         data = libapprun.peek_file_bytes(apprunx, "AppRunMeta/DesktopLinks/Icon.png")
+        if len(data) > MAX_ICON_BYTES or not data.startswith(b"\x89PNG\r\n\x1a\n"):
+            return DEFAULT_ICON
         Path(dest).write_bytes(data)
         return dest
     except FileNotFoundError:
         return DEFAULT_ICON
 
 
-def _compose(icon_path: str, output: str, size: str) -> None:
+def _compose(icon_path: str, output: str, size: int) -> None:
     Path(output).parent.mkdir(parents=True, exist_ok=True)
-    badge_size = str(int(int(size) / 3))
+    badge_size = str(max(16, int(size / 3)))
+    size_arg = str(size)
 
     # 공통 전처리: 투명 배경을 흰색으로 flatten
     base_args = [
@@ -77,7 +90,7 @@ def _compose(icon_path: str, output: str, size: str) -> None:
         "-background", "none",
         "-alpha", "on",
         icon_path,
-        "-resize", f"{size}x{size}",
+        "-resize", f"{size_arg}x{size_arg}",
     ]
 
     if Path(BADGE_ICON).exists():
@@ -91,12 +104,12 @@ def _compose(icon_path: str, output: str, size: str) -> None:
             "-gravity", "SouthEast",
             "-composite",
             output
-        ], check=True)
+        ], check=True, timeout=10)
     else:
         subprocess.run([
             *base_args,
             output
-        ], check=True)
+        ], check=True, timeout=10)
 
 
 if __name__ == "__main__":

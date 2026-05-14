@@ -17,7 +17,7 @@ AppRun 실행 파일과 호환성 링크가 위치합니다.
 
 공용 Python 모듈이 위치합니다.
 
-- `libapprun.py`
+- `libapprun/`
 - `apprun_i18n.py`
 - `AppContext.py` 링크
 

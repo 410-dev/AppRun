@@ -13,12 +13,7 @@ if [ -z "$1" ] || [ "$1" == "nogui" ]; then
         exit 1
     fi
 
-    sudo chown -R root:root src
-    sudo chmod -R 755 src
-    sudo dpkg-deb --build src
-    sudo chown -R $USER:$USER src
-    sudo chmod -R 755 src
-    sudo chown $USER src.deb
+    dpkg-deb --root-owner-group --build src
     if [[ "$1" == "nogui" ]]; then
         mv src.deb apprun-nogui.deb
     else

@@ -4,5 +4,5 @@ Section: misc
 Priority: optional
 Architecture: all
 Maintainer: LKS410
-Depends: python3, python3-venv, python3-inotify, python3-pyinotify, python3-packaging, curl, squashfs-tools, squashfuse, fuse, imagemagick, zenity, libnotify-bin
+Depends: python3, python3-venv, python3-inotify, python3-pyinotify, python3-packaging, uv, squashfs-tools, squashfuse, fuse, imagemagick, zenity, libnotify-bin
 Description: -
