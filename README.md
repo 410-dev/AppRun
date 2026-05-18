@@ -28,22 +28,35 @@ CLI, 알림, GUI 다이얼로그 메시지는 시스템 locale 에 따라 출력
 apprun3-package ./my-app/ -o my-app.apprunx
 ```
 
+## uv 패키지 빌드
+
+AppRun 은 `uv` 실행 파일을 필요로 합니다. 공식 Debian/Ubuntu apt 패키지가 없는 환경에서는 다음 명령으로 AppRun용 uv 패키지를 빌드할 수 있습니다:
+```bash
+./build-uv.sh
+```
+
+빌드 결과는 현재 아키텍처에 맞는 `apprun-uv_<uv-version>-1_<arch>.deb` 입니다. 이 패키지는 공식 uv release artifact 의 checksum 을 검증한 뒤 `/usr/lib/uvs/<arch>/uv`, `/usr/lib/uvs/<arch>/uvx` 에 바이너리를 설치하고 `/usr/bin/uv`, `/usr/bin/uvx` 심볼릭 링크를 제공합니다.
+
+다른 아키텍처 패키지를 만들려면 다음처럼 실행합니다:
+```bash
+./build-uv.sh arm64
+UV_VERSION=0.11.14 ./build-uv.sh amd64
+```
+
 ## 설치 방법
 
 
 ### GUI 환경이 없는 Debian / Ubuntu
 AppRun 은 GUI 환경을 전제하고 설계되었지만 GUI 환경이 없는 서버에도 설치할 수 있습니다.
-1. `src/DEBIAN/control` 파일에서 `Depends` 항목 중 다음 항목을 삭제하세요:
-```
-imagemagick, zenity, libnotify-bin
-```
-2. 이후 다음 명령을 통해 빌드하세요.
+다음 명령으로 headless 패키지를 빌드하세요.
 ```bash
-./build.sh
+./build.sh --no-gui
 ```
-3. 빌드된 .deb 파일을 설치하세요.
+빌드 결과는 `apprun-headless.deb` 입니다. 이 패키지는 DropIn 데스크톱 데몬과 GUI 통합 파일을 포함하지 않고, `apprun` 가상 패키지를 제공합니다.
+
+빌드된 .deb 파일을 설치하세요.
 ```bash
-sudo apt install ./apprun.deb
+sudo apt install ./apprun-headless.deb
 ```
 
 
