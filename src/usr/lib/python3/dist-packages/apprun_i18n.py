@@ -60,14 +60,14 @@ def _load_lang(lang: str) -> dict[str, str]:
     return data
 
 
-def tr(key: str, **kwargs) -> str:
+def tr(message_key: str, **kwargs) -> str:
     template = None
     for lang in _candidate_langs():
-        template = _load_lang(lang).get(key)
+        template = _load_lang(lang).get(message_key)
         if template is not None:
             break
     if template is None:
-        template = key
+        template = message_key
 
     try:
         return template.format(**kwargs)

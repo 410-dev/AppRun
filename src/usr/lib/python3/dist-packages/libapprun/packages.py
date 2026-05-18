@@ -6,7 +6,11 @@ import re
 import subprocess
 import sys
 
-from packaging.version import InvalidVersion, Version
+try:
+    from packaging.version import InvalidVersion, Version
+except ModuleNotFoundError:  # pragma: no cover - exercised only on minimal dev hosts
+    InvalidVersion = ValueError
+    Version = None
 
 from apprun_i18n import tr
 from apprun_validation import ValidationError, validate_debian_package_name
@@ -47,6 +51,8 @@ def _get_installed_version(pkg_name: str) -> str | None:
 def _version_satisfies(installed: str, operator: str, required: str) -> bool:
     """Compare versions, falling back to string comparison for Debian formats."""
     try:
+        if Version is None:
+            raise InvalidVersion("packaging is unavailable")
         installed_version = Version(installed)
         required_version = Version(required)
         ops = {
@@ -95,4 +101,3 @@ def list_missing_base_packages(path: str) -> list[str]:
             missing.append(req)
 
     return missing
-

@@ -74,3 +74,12 @@ sudo ./src/DEBIAN/postinst
 [Collection ID](docs/Collection-ID.md)
 
 레거시 Format 1/2 문서는 [archived](docs/archived/Making-Bundle.md) 에 보관되어 있습니다. 3.2.0 부터는 참고용이며 신규 번들 제작에는 사용하지 않습니다.
+
+## 테스트
+
+프로젝트 루트에서 다음 명령으로 unit 테스트를 실행합니다:
+```bash
+./run-tests.sh
+```
+
+테스트는 표준 라이브러리 `unittest` 기반이며, `src/usr/lib/python3/dist-packages` 를 `PYTHONPATH` 에 추가한 뒤 실행됩니다.
