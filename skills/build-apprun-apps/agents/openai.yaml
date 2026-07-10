@@ -1,0 +1,4 @@
+interface:
+  display_name: "Build AppRun Apps"
+  short_description: "Create and operate AppRun Format 3 bundles"
+  default_prompt: "Use $build-apprun-apps to design, package, and verify this application as an AppRun Format 3 bundle."

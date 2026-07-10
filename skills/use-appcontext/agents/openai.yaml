@@ -1,0 +1,4 @@
+interface:
+  display_name: "AppContext Development"
+  short_description: "Build safe AppRun apps with AppContext"
+  default_prompt: "Use $use-appcontext to add safe Box storage and process management to this AppRun Python application."
